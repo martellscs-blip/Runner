@@ -377,6 +377,11 @@ let S = {
   github: {
     lastUpdatedAt: null, // ISO string de la última vez que se actualizó el repo desde la app
   },
+  shoes: {
+    name: 'Hoka',
+    startDate: fmt(today), // se puede editar/reiniciar desde la tarjeta de tenis
+    thresholdKm: 550,    // km recomendados de vida útil
+  },
 };
 
 const hasClaudeStorage = typeof window.storage !== 'undefined' && window.storage !== null;
@@ -637,6 +642,7 @@ async function loadState() {
     if (parsed.strava) S.strava = { ...S.strava, ...parsed.strava, syncing: false };
     if (parsed.googleDrive) S.googleDrive = { ...S.googleDrive, ...parsed.googleDrive, syncing: false };
     if (parsed.github) S.github = { ...S.github, ...parsed.github };
+    if (parsed.shoes) S.shoes = { ...S.shoes, ...parsed.shoes };
   }
 }
 
@@ -644,7 +650,7 @@ async function persist() {
   const payload = JSON.stringify({
     runDays: S.runDays, weighIns: S.weighIns, sessionsDone: S.sessionsDone,
     activities: S.activities, strava: S.strava,
-    googleDrive: S.googleDrive, github: S.github,
+    googleDrive: S.googleDrive, github: S.github, shoes: S.shoes,
   });
 
   let savedOk = false;
@@ -823,9 +829,92 @@ function renderHome() {
 
       ${renderStravaCard()}
       ${renderGoogleDriveCard()}
+      ${renderShoeCard()}
       ${renderRecentActivities()}
     </div>
   `;
+}
+
+function shoeKmUsed() {
+  const start = S.shoes.startDate;
+  return Object.values(S.activities)
+    .filter(a => a.date >= start)
+    .reduce((sum, a) => sum + (a.distanceKm || 0), 0);
+}
+
+function renderShoeCard() {
+  const used = shoeKmUsed();
+  const threshold = S.shoes.thresholdKm || 550;
+  const pct = Math.min(100, (used / threshold) * 100);
+  let status = 'ok', label = 'Vas bien';
+  if (used >= threshold) { status = 'danger'; label = 'Ya pasaron su vida útil recomendada'; }
+  else if (used >= threshold * 0.85) { status = 'warn'; label = 'Se están acercando al límite'; }
+  const color = status === 'danger' ? '#f87171' : status === 'warn' ? '#facc15' : '#4ade80';
+  const borderColor = status === 'danger' ? 'rgba(248,113,113,0.4)' : status === 'warn' ? 'rgba(250,204,21,0.4)' : 'rgba(255,255,255,0.08)';
+  return `
+    <div class="backup-card" style="border-color:${borderColor};">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div class="eyebrow" style="margin-bottom:0;">Tenis · ${S.shoes.name || 'Sin nombre'}</div>
+        <button data-shoe-edit="1" style="font-size:11px;color:rgba(255,255,255,0.4);text-decoration:underline;">Editar</button>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+        <span class="val font-display" style="font-size:20px;color:${color};">${used.toFixed(0)} km</span>
+        <span style="font-size:11px;color:rgba(255,255,255,0.4);">de ${threshold} km</span>
+      </div>
+      <div style="width:100%;height:6px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;">
+        <div style="width:${pct}%;height:100%;background:${color};"></div>
+      </div>
+      <div style="font-size:11px;color:${color};margin-top:8px;font-weight:600;">${label}</div>
+    </div>
+  `;
+}
+
+function openShoeModal() {
+  const root = document.getElementById('modalRoot');
+  root.innerHTML = `
+    <div class="modal-overlay" data-modal-overlay="1">
+      <div class="modal-sheet">
+        <div class="modal-head">
+          <div class="t font-display">Tus tenis</div>
+          <button class="modal-close" data-modal-close="1">${icon('x',18)}</button>
+        </div>
+        <div class="modal-desc">Registra cuándo estrenaste este par. La app suma los km que corras (vía Strava) desde esa fecha y te avisa cuando se acerquen al límite.</div>
+
+        <div class="gh-label">Modelo</div>
+        <input type="text" id="shoeNameInput" class="gh-input" value="${S.shoes.name || ''}" placeholder="Ej. Hoka Clifton 9">
+
+        <div class="gh-label">Fecha de estreno</div>
+        <input type="date" id="shoeStartInput" class="gh-input" value="${S.shoes.startDate}">
+
+        <div class="gh-label">Km recomendados de vida útil</div>
+        <input type="number" id="shoeThresholdInput" class="gh-input" value="${S.shoes.thresholdKm}">
+
+        <button class="modal-btn" data-shoe-save="1">Guardar</button>
+        <button class="gh-repo-toggle" data-shoe-reset-today="1">Ya los estrené hoy — reiniciar contador</button>
+      </div>
+    </div>
+  `;
+}
+
+function saveShoeSettings() {
+  const name = document.getElementById('shoeNameInput').value.trim();
+  const start = document.getElementById('shoeStartInput').value;
+  const threshold = parseFloat(document.getElementById('shoeThresholdInput').value);
+  S.shoes.name = name || 'Tenis';
+  S.shoes.startDate = start || fmt(today);
+  S.shoes.thresholdKm = threshold > 0 ? threshold : 550;
+  persist();
+  document.getElementById('modalRoot').innerHTML = '';
+  showToast('Tenis actualizados ✅');
+  render();
+}
+
+function resetShoeToday() {
+  S.shoes.startDate = fmt(today);
+  persist();
+  document.getElementById('modalRoot').innerHTML = '';
+  showToast('Contador de tenis reiniciado');
+  render();
 }
 
 function renderGoogleDriveCard() {
@@ -1657,6 +1746,15 @@ document.addEventListener('click', (e) => {
 
   const ghUploadBtn = e.target.closest('[data-gh-upload]');
   if (ghUploadBtn) { uploadToGithub(); return; }
+
+  const shoeEditBtn = e.target.closest('[data-shoe-edit]');
+  if (shoeEditBtn) { openShoeModal(); return; }
+
+  const shoeSaveBtn = e.target.closest('[data-shoe-save]');
+  if (shoeSaveBtn) { saveShoeSettings(); return; }
+
+  const shoeResetBtn = e.target.closest('[data-shoe-reset-today]');
+  if (shoeResetBtn) { resetShoeToday(); return; }
 });
 
 document.addEventListener('change', (e) => {
