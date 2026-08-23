@@ -328,6 +328,18 @@ const PLAN = WEEKS_RAW.map((w, i) => {
 });
 const TOTAL_SESSIONS = PLAN.length * 3;
 
+const PR_BUCKETS = [
+  { key: '5k',  label: '5 km',            km: 5,       tolerance: 0.10 },
+  { key: '10k', label: '10 km',           km: 10,      tolerance: 0.10 },
+  { key: '15k', label: '15 km',           km: 15,      tolerance: 0.10 },
+  { key: '21k', label: 'Medio maratón',   km: 21.0975, tolerance: 0.05 },
+  { key: '42k', label: 'Maratón',         km: 42.195,  tolerance: 0.05 },
+];
+function raceLabelForDistance(km) {
+  const b = PR_BUCKETS.find(b => km >= b.km * (1 - b.tolerance) && km <= b.km * (1 + b.tolerance));
+  return b ? b.label : `${km} km`;
+}
+
 const WEIGH_DAYS = (() => {
   const out = [];
   let d = new Date(PLAN_START);
@@ -382,6 +394,10 @@ let S = {
     startDate: fmt(today), // se puede editar/reiniciar desde la tarjeta de tenis
     thresholdKm: 550,    // km recomendados de vida útil
   },
+  weightSettings: {
+    startWeight: 92,      // única fuente de verdad; editable desde la pestaña Peso
+  },
+  races: [],               // { id, name, date, distanceKm, timeSec, notes }
 };
 
 const hasClaudeStorage = typeof window.storage !== 'undefined' && window.storage !== null;
@@ -480,16 +496,17 @@ function disconnectStrava() {
 
 function secToPaceStr(movingTimeSec, distanceMeters) {
   if (!distanceMeters) return '—';
-  const secPerKm = movingTimeSec / (distanceMeters / 1000);
+  const secPerKm = Math.round(movingTimeSec / (distanceMeters / 1000));
   const m = Math.floor(secPerKm / 60);
-  const s = Math.round(secPerKm % 60);
+  const s = secPerKm % 60;
   return `${m}:${s.toString().padStart(2, '0')} /km`;
 }
 
 function secToDuration(sec) {
+  sec = Math.round(sec);
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
-  const s = Math.round(sec % 60);
+  const s = sec % 60;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
@@ -572,6 +589,7 @@ async function syncStravaActivities(silent) {
           avgHr: act.average_heartrate || null,
           maxHr: act.max_heartrate || null,
           avgCadence: act.average_cadence || null,
+          workoutType: act.workout_type,
           avgSpeed: act.average_speed,
           maxSpeed: act.max_speed,
           kudos: act.kudos_count,
@@ -643,6 +661,8 @@ async function loadState() {
     if (parsed.googleDrive) S.googleDrive = { ...S.googleDrive, ...parsed.googleDrive, syncing: false };
     if (parsed.github) S.github = { ...S.github, ...parsed.github };
     if (parsed.shoes) S.shoes = { ...S.shoes, ...parsed.shoes };
+    if (parsed.weightSettings) S.weightSettings = { ...S.weightSettings, ...parsed.weightSettings };
+    if (Array.isArray(parsed.races)) S.races = parsed.races;
   }
 }
 
@@ -651,6 +671,7 @@ async function persist() {
     runDays: S.runDays, weighIns: S.weighIns, sessionsDone: S.sessionsDone,
     activities: S.activities, strava: S.strava,
     googleDrive: S.googleDrive, github: S.github, shoes: S.shoes,
+    weightSettings: S.weightSettings, races: S.races,
   });
 
   let savedOk = false;
@@ -718,7 +739,7 @@ function renderStravaCard() {
         <button data-strava-disconnect="1" style="font-size:11px;color:rgba(255,255,255,0.4);text-decoration:underline;">Desconectar</button>
       </div>
       <button class="btn-backup" style="width:100%;background:#FC5200;color:#fff;flex-direction:column;gap:3px;padding:12px;" data-strava-sync="1" ${st.syncing ? 'disabled' : ''}>
-        <span style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;">${icon('zap',15,'#fff')} ${st.syncing ? 'Sincronizando…' : `Conectado · ${(st.athleteName || 'Strava').toUpperCase()}`}</span>
+        <span style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;">${icon('zap',15,'#fff')} ${st.syncing ? 'Sincronizando…' : `Conectado · ${escapeHtml((st.athleteName || 'Strava').toUpperCase())}`}</span>
         ${!st.syncing ? `<span style="font-size:11px;font-weight:500;opacity:0.85;">Última sincronización: ${lastSync}</span>` : ''}
       </button>
       ${st.error ? `<div style="font-size:11px;color:#f87171;margin-top:8px;">${st.error}</div>` : ''}
@@ -733,7 +754,7 @@ function renderRecentActivities() {
     <div class="card" style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
-          <div style="font-size:13px;font-weight:700;">${a.name}</div>
+          <div style="font-size:13px;font-weight:700;">${escapeHtml(a.name)}</div>
           <div style="font-size:11px;color:rgba(255,255,255,0.5);">${fmtShort(new Date(a.date + 'T00:00:00'))} · ${a.sportType}</div>
         </div>
         <div style="text-align:right;">
@@ -761,14 +782,15 @@ function renderRecentActivities() {
 
 function renderHome() {
   const daysToRace = Math.max(0, Math.round((RACE_DATE - today) / DAY_MS));
-  const completedSessions = S.runDays.length;
-  const progressPct = Math.min(100, Math.round((completedSessions / TOTAL_SESSIONS) * 100));
+  const daysRunCount = S.runDays.length;
+  const sessionsCompletedCount = Object.keys(S.sessionsDone).length;
+  const progressPct = Math.min(100, Math.round((sessionsCompletedCount / TOTAL_SESSIONS) * 100));
   const cw = PLAN[currentWeekIndex()];
   const cwRealKm = +weekRealKm(cw).toFixed(1);
   const cwTargetKm = parseFloat(cw.badge) || null;
 
   const loggedWeights = Object.entries(S.weighIns).sort(([a],[b]) => a < b ? -1 : 1);
-  const startWeight = 92;
+  const startWeight = S.weightSettings.startWeight;
   const lastWeight = loggedWeights.length ? loggedWeights[loggedWeights.length-1][1] : startWeight;
   const delta = +(lastWeight - startWeight).toFixed(1);
   const hasWeights = loggedWeights.length > 0;
@@ -786,7 +808,7 @@ function renderHome() {
       <div class="section">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
           <div class="eyebrow" style="margin-bottom:0;">Progreso del plan</div>
-          <span style="font-size:12px;color:rgba(255,255,255,0.6);font-weight:500;">${completedSessions}/${TOTAL_SESSIONS} entrenamientos</span>
+          <span style="font-size:12px;color:rgba(255,255,255,0.6);font-weight:500;">${sessionsCompletedCount}/${TOTAL_SESSIONS} entrenamientos</span>
         </div>
         <div class="energy-track">
           <div class="energy-fill" style="width:${Math.max(progressPct,3)}%"></div>
@@ -798,7 +820,7 @@ function renderHome() {
       <div class="stat-grid">
         <button class="stat-card" data-tab="calendar">
           <div style="color:#FFCC00;margin-bottom:6px;">${icon('flame',15)}</div>
-          <div class="val font-display">${completedSessions}</div>
+          <div class="val font-display">${daysRunCount}</div>
           <div class="lbl">Días corridos</div>
         </button>
         <div class="stat-card">
@@ -831,6 +853,7 @@ function renderHome() {
       ${renderGoogleDriveCard()}
       ${renderShoeCard()}
       ${renderRecentActivities()}
+      ${renderRacesCard()}
     </div>
   `;
 }
@@ -854,7 +877,7 @@ function renderShoeCard() {
   return `
     <div class="backup-card" style="border-color:${borderColor};">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <div class="eyebrow" style="margin-bottom:0;">Tenis · ${S.shoes.name || 'Sin nombre'}</div>
+        <div class="eyebrow" style="margin-bottom:0;">Tenis · ${escapeHtml(S.shoes.name || 'Sin nombre')}</div>
         <button data-shoe-edit="1" style="font-size:11px;color:rgba(255,255,255,0.4);text-decoration:underline;">Editar</button>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
@@ -881,7 +904,7 @@ function openShoeModal() {
         <div class="modal-desc">Registra cuándo estrenaste este par. La app suma los km que corras (vía Strava) desde esa fecha y te avisa cuando se acerquen al límite.</div>
 
         <div class="gh-label">Modelo</div>
-        <input type="text" id="shoeNameInput" class="gh-input" value="${S.shoes.name || ''}" placeholder="Ej. Hoka Clifton 9">
+        <input type="text" id="shoeNameInput" class="gh-input" value="${escapeHtml(S.shoes.name || '')}" placeholder="Ej. Hoka Clifton 9">
 
         <div class="gh-label">Fecha de estreno</div>
         <input type="date" id="shoeStartInput" class="gh-input" value="${S.shoes.startDate}">
@@ -917,6 +940,130 @@ function resetShoeToday() {
   render();
 }
 
+function renderRacesCard() {
+  const races = S.races || [];
+  const rows = races.slice(0, 8).map(r => `
+    <button class="card" style="margin-bottom:10px;width:100%;text-align:left;display:block;" data-race-edit="${r.id}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <div style="font-size:13px;font-weight:700;">${escapeHtml(r.name)}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);">${fmtShort(new Date(r.date + 'T00:00:00'))} · ${raceLabelForDistance(r.distanceKm)}</div>
+        </div>
+        <div class="font-display" style="font-size:16px;color:#FFCC00;">${r.timeSec ? secToHMS(r.timeSec) : '—'}</div>
+      </div>
+      ${r.notes ? `<div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:6px;">${escapeHtml(r.notes)}</div>` : ''}
+    </button>
+  `).join('');
+
+  return `
+    <div class="section">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div class="eyebrow" style="margin-bottom:0;">Mis carreras</div>
+        <button data-race-add="1" style="font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;">+ Registrar</button>
+      </div>
+      ${races.length
+        ? rows
+        : `<div class="card" style="text-align:center;color:rgba(255,255,255,0.4);font-size:13px;">Aún no has registrado carreras. Guarda aquí tus 5k, 10k, medios y maratones para llevar tu historial.</div>`}
+    </div>
+  `;
+}
+
+function openRaceModal(id) {
+  const root = document.getElementById('modalRoot');
+  const race = id ? (S.races || []).find(r => r.id === id) : null;
+  const isEdit = !!race;
+  const preset = race ? PR_BUCKETS.find(b => Math.abs(b.km - race.distanceKm) < 0.01) : null;
+  const isCustom = race ? !preset : false;
+  const h = race && race.timeSec ? Math.floor(race.timeSec / 3600) : '';
+  const m = race && race.timeSec ? Math.floor((race.timeSec % 3600) / 60) : '';
+  const s = race && race.timeSec ? Math.round(race.timeSec % 60) : '';
+
+  root.innerHTML = `
+    <div class="modal-overlay" data-modal-overlay="1">
+      <div class="modal-sheet">
+        <div class="modal-head">
+          <div class="t font-display">${isEdit ? 'Editar carrera' : 'Registrar carrera'}</div>
+          <button class="modal-close" data-modal-close="1">${icon('x',18)}</button>
+        </div>
+
+        <div class="gh-label">Nombre del evento</div>
+        <input type="text" id="raceNameInput" class="gh-input" placeholder="Ej. Medio Maratón CDMX" value="${race ? escapeHtml(race.name) : ''}">
+
+        <div class="gh-label">Fecha</div>
+        <input type="date" id="raceDateInput" class="gh-input" value="${race ? race.date : fmt(today)}">
+
+        <div class="gh-label">Distancia</div>
+        <select id="raceDistanceSelect" class="gh-input">
+          <option value="5" ${preset && preset.key==='5k' ? 'selected' : ''}>5 km</option>
+          <option value="10" ${preset && preset.key==='10k' ? 'selected' : ''}>10 km</option>
+          <option value="15" ${preset && preset.key==='15k' ? 'selected' : ''}>15 km</option>
+          <option value="21.0975" ${preset && preset.key==='21k' ? 'selected' : ''}>Medio maratón (21.1 km)</option>
+          <option value="42.195" ${preset && preset.key==='42k' ? 'selected' : ''}>Maratón (42.2 km)</option>
+          <option value="custom" ${isCustom ? 'selected' : ''}>Otra distancia…</option>
+        </select>
+        <input type="number" step="0.01" min="0.1" id="raceDistanceCustom" class="gh-input" placeholder="Km exactos" style="display:${isCustom ? 'block' : 'none'};margin-top:6px;" value="${isCustom ? race.distanceKm : ''}">
+
+        <div class="gh-label">Tiempo oficial</div>
+        <div style="display:flex;gap:8px;">
+          <input type="number" min="0" max="99" id="raceHInput" class="gh-input" placeholder="hh" style="text-align:center;" value="${h}">
+          <input type="number" min="0" max="59" id="raceMInput" class="gh-input" placeholder="mm" style="text-align:center;" value="${m}">
+          <input type="number" min="0" max="59" id="raceSInput" class="gh-input" placeholder="ss" style="text-align:center;" value="${s}">
+        </div>
+
+        <div class="gh-label">Notas (opcional)</div>
+        <input type="text" id="raceNotesInput" class="gh-input" placeholder="Cómo te sentiste, clima, etc." value="${race ? escapeHtml(race.notes || '') : ''}">
+
+        <button class="modal-btn" data-race-save="1" data-race-id="${race ? race.id : ''}">Guardar</button>
+        ${isEdit ? `<button class="gh-repo-toggle" style="color:#f87171;" data-race-delete="1" data-race-id="${race.id}">Eliminar carrera</button>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function saveRace(existingId) {
+  const name = document.getElementById('raceNameInput').value.trim();
+  const date = document.getElementById('raceDateInput').value;
+  const distSelect = document.getElementById('raceDistanceSelect').value;
+  const distCustom = parseFloat(document.getElementById('raceDistanceCustom').value);
+  const distanceKm = distSelect === 'custom' ? distCustom : parseFloat(distSelect);
+  const h = parseInt(document.getElementById('raceHInput').value, 10) || 0;
+  const m = parseInt(document.getElementById('raceMInput').value, 10) || 0;
+  const s = parseInt(document.getElementById('raceSInput').value, 10) || 0;
+  const timeSec = h * 3600 + m * 60 + s;
+  const notes = document.getElementById('raceNotesInput').value.trim();
+
+  if (!name) { showToast('Ponle un nombre al evento'); return; }
+  if (!date) { showToast('Falta la fecha'); return; }
+  if (!distanceKm || distanceKm <= 0) { showToast('Falta la distancia'); return; }
+
+  const race = {
+    id: existingId || ('race_' + Date.now()),
+    name, date, distanceKm,
+    timeSec: timeSec > 0 ? timeSec : null,
+    notes,
+  };
+
+  S.races = S.races || [];
+  const idx = S.races.findIndex(r => r.id === race.id);
+  if (idx >= 0) S.races[idx] = race; else S.races.push(race);
+  S.races.sort((a, b) => b.date.localeCompare(a.date));
+
+  persist();
+  document.getElementById('modalRoot').innerHTML = '';
+  showToast(existingId ? 'Carrera actualizada ✅' : 'Carrera registrada ✅');
+  render();
+}
+
+function deleteRace(id) {
+  const ok = window.confirm('¿Eliminar este registro de carrera? No se puede deshacer.');
+  if (!ok) return;
+  S.races = (S.races || []).filter(r => r.id !== id);
+  persist();
+  document.getElementById('modalRoot').innerHTML = '';
+  showToast('Carrera eliminada');
+  render();
+}
+
 function renderGoogleDriveCard() {
   const gd = S.googleDrive || {};
   return `
@@ -926,6 +1073,11 @@ function renderGoogleDriveCard() {
         ${icon('cloud',15)} ${gd.syncing ? 'Guardando…' : 'Guardar respaldo en Google Drive'}
       </button>
       ${gd.error ? `<div style="font-size:11px;color:#f87171;margin-top:8px;">${gd.error}</div>` : ''}
+      <div style="display:flex;justify-content:center;flex-wrap:wrap;gap:6px 14px;margin-top:10px;">
+        <button data-gdrive-restore="1" style="font-size:11px;color:rgba(255,255,255,0.4);text-decoration:underline;" ${gd.syncing ? 'disabled' : ''}>Restaurar último respaldo</button>
+        <button data-backup="copy" style="font-size:11px;color:rgba(255,255,255,0.4);text-decoration:underline;">Exportar manual</button>
+        <button data-backup="paste" style="font-size:11px;color:rgba(255,255,255,0.4);text-decoration:underline;">Importar manual</button>
+      </div>
     </div>
   `;
 }
@@ -937,10 +1089,80 @@ function renderGoogleDriveCard() {
    ESTADÍSTICAS, PROYECCIÓN Y RECOMENDACIONES (100% desde Strava)
 --------------------------------------------------------------- */
 function secToHMS(sec) {
+  sec = Math.round(sec);
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
-  const s = Math.round(sec % 60);
+  const s = sec % 60;
   return `${h}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+}
+
+function computePRs() {
+  const results = {};
+  PR_BUCKETS.forEach(b => { results[b.key] = null; });
+
+  Object.values(S.activities).forEach(a => {
+    PR_BUCKETS.forEach(b => {
+      const lo = b.km * (1 - b.tolerance), hi = b.km * (1 + b.tolerance);
+      if (a.distanceKm >= lo && a.distanceKm <= hi) {
+        const cur = results[b.key];
+        if (!cur || a.movingTimeSec < cur.timeSec) {
+          results[b.key] = { timeSec: a.movingTimeSec, date: a.date, source: 'Strava', distanceKm: a.distanceKm };
+        }
+      }
+    });
+  });
+
+  (S.races || []).forEach(r => {
+    if (!r.timeSec) return;
+    PR_BUCKETS.forEach(b => {
+      const lo = b.km * (1 - b.tolerance), hi = b.km * (1 + b.tolerance);
+      if (r.distanceKm >= lo && r.distanceKm <= hi) {
+        const cur = results[b.key];
+        if (!cur || r.timeSec < cur.timeSec) {
+          results[b.key] = { timeSec: r.timeSec, date: r.date, source: 'Carrera registrada', distanceKm: r.distanceKm };
+        }
+      }
+    });
+  });
+
+  return results;
+}
+
+function renderPRsBlock() {
+  const prs = computePRs();
+  const anyData = PR_BUCKETS.some(b => prs[b.key]);
+  if (!anyData) return '';
+
+  const rows = PR_BUCKETS.map(b => {
+    const r = prs[b.key];
+    return `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+        <div style="font-size:13px;font-weight:600;">${b.label}</div>
+        ${r
+          ? `<div style="text-align:right;">
+               <div style="font-size:13px;color:#FFCC00;font-weight:700;">${secToHMS(r.timeSec)}</div>
+               <div style="font-size:10px;color:rgba(255,255,255,0.4);">${fmtShort(new Date(r.date + 'T00:00:00'))} · ${r.source}</div>
+             </div>`
+          : `<div style="font-size:12px;color:rgba(255,255,255,0.3);">Sin marca</div>`}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="dashed-rule"></div>
+    <div style="margin-top:12px;">
+      <div class="eyebrow" style="margin-bottom:8px;">Tus mejores marcas</div>
+      ${rows}
+    </div>
+  `;
+}
+
+function computeEFData() {
+  return Object.values(S.activities)
+    .filter(a => a.avgHr && a.avgSpeed && a.movingTimeSec >= 900) // mín. 15 min, con FC real
+    .filter(a => a.workoutType === 0 || a.workoutType === 2 || a.workoutType === undefined || a.workoutType === null) // solo trote normal o carrera larga; excluye carreras (1) e intervalos/calidad (3)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(a => ({ date: a.date, ef: +((a.avgSpeed * 60) / a.avgHr).toFixed(3) }));
 }
 
 function computeProgressStats() {
@@ -954,20 +1176,28 @@ function computeProgressStats() {
   const longest = runs.reduce((max, a) => (!max || a.distanceKm > max.distanceKm) ? a : max, null);
 
   const weeklyKm = PLAN.map(w => ({ week: w.week, start: w.start, km: +weekRealKm(w).toFixed(2), target: parseFloat(w.badge) || null }));
-  const weeksWithData = weeklyKm.filter(w => w.km > 0);
 
+  // Solo compara semanas calendario realmente consecutivas con datos en ambas —
+  // si hay una semana vacía en medio (ej. una lesión), esa comparación se salta
+  // en vez de "puentear" el hueco como si fuera una sola semana de crecimiento.
   let growthRates = [];
-  for (let i = 1; i < weeksWithData.length; i++) {
-    const prev = weeksWithData[i - 1], cur = weeksWithData[i];
-    if (prev.km > 0) growthRates.push((cur.km - prev.km) / prev.km);
+  for (let i = 1; i < weeklyKm.length; i++) {
+    const prev = weeklyKm[i - 1], cur = weeklyKm[i];
+    if (prev.km > 0 && cur.km > 0) growthRates.push((cur.km - prev.km) / prev.km);
   }
   const avgGrowthPct = growthRates.length ? Math.round((growthRates.reduce((a, b) => a + b, 0) / growthRates.length) * 100) : null;
 
-  let expectedCount = 0;
+  // Cumplimiento: solo cuenta como "hecha" una sesión si su fecha ya pasó,
+  // para que no se pueda superar 100% marcando semanas futuras de más.
+  let expectedCount = 0, doneCount = 0;
   PLAN.forEach(w => {
-    [w.day1Date, w.day2Date, w.day3Date].forEach(d => { if (d <= today) expectedCount++; });
+    [[1, w.day1Date], [2, w.day2Date], [3, w.day3Date]].forEach(([dayIdx, d]) => {
+      if (d <= today) {
+        expectedCount++;
+        if (S.sessionsDone[`${w.week}-${dayIdx}`]) doneCount++;
+      }
+    });
   });
-  const doneCount = Object.keys(S.sessionsDone).length;
   const compliancePct = expectedCount ? Math.round((doneCount / expectedCount) * 100) : null;
 
   const withCadence = runs.filter(a => a.avgCadence);
@@ -978,14 +1208,21 @@ function computeProgressStats() {
     projectedRaceSec = longest.movingTimeSec * Math.pow(42.195 / longest.distanceKm, 1.06);
   }
 
-  const peakWeek = PLAN.find(w => w.badge === '32 km');
+  // Semana pico: la de mayor kilometraje objetivo en todo el plan, calculada
+  // dinámicamente (no por texto fijo "32 km") para que nunca quede desincronizada
+  // si el plan cambia.
+  const peakWeek = PLAN.reduce((max, w) => {
+    const km = parseFloat(w.badge);
+    return (km && (!max || km > parseFloat(max.badge))) ? w : max;
+  }, null);
+  const peakTargetKm = peakWeek ? parseFloat(peakWeek.badge) : null;
   const weeksToPeak = peakWeek ? Math.max(0, Math.round((peakWeek.start - today) / DAY_MS / 7)) : null;
-  const kmNeededToPeak = peakWeek ? +(32 - (longest ? longest.distanceKm : 0)).toFixed(1) : null;
+  const kmNeededToPeak = peakWeek ? +(peakTargetKm - (longest ? longest.distanceKm : 0)).toFixed(1) : null;
 
   return {
     totalKm: +totalKm.toFixed(1), totalRuns: runs.length, avgPaceSecPerKm,
     longest, avgGrowthPct, compliancePct, doneCount, expectedCount,
-    avgCadenceSpm, projectedRaceSec, peakWeek, weeksToPeak, kmNeededToPeak,
+    avgCadenceSpm, projectedRaceSec, peakWeek, peakTargetKm, weeksToPeak, kmNeededToPeak,
   };
 }
 
@@ -996,13 +1233,14 @@ function renderProgressSection() {
       <div class="card" style="margin-top:20px;">
         <div class="eyebrow">Estadísticas y proyección</div>
         <div class="desc" style="color:rgba(255,255,255,0.6);font-size:13px;">Aún no hay carreras sincronizadas desde Strava. Conecta y corre para ver aquí tus estadísticas, tips y proyección al maratón.</div>
+        ${renderPRsBlock()}
       </div>
     `;
   }
 
   const paceStr = `${Math.floor(st.avgPaceSecPerKm/60)}:${Math.round(st.avgPaceSecPerKm%60).toString().padStart(2,'0')} /km`;
 
-  const growthWarning = st.avgGrowthPct !== null && st.avgGrowthPct > 12;
+  const growthWarning = st.avgGrowthPct !== null && st.avgGrowthPct > 10;
   const growthNote = st.avgGrowthPct === null ? 'Aún no hay suficientes semanas con datos para calcular tu ritmo de progresión.'
     : growthWarning
       ? `Estás subiendo tu volumen semanal ~${st.avgGrowthPct}% en promedio — por encima del 10% recomendado. Riesgo de lesión si se mantiene.`
@@ -1019,13 +1257,32 @@ function renderProgressSection() {
 
   const peakProjection = st.peakWeek
     ? (st.kmNeededToPeak <= 0
-        ? `Ya superaste los 32 km de tu semana pico (${st.peakWeek.week}) en tu carrera más larga hasta hoy. Cuidado con no forzar de más antes de tiempo.`
-        : `Te faltan ${st.kmNeededToPeak} km para llegar a tu carrera larga máxima de 32 km (semana ${st.peakWeek.week}, ${st.weeksToPeak} semana(s) a partir de hoy). Con incrementos del 10% semanal en tu carrera larga, es una meta alcanzable si mantienes constancia.`)
+        ? `Ya superaste los ${st.peakTargetKm} km de tu semana pico (${st.peakWeek.week}) en tu carrera más larga hasta hoy. Cuidado con no forzar de más antes de tiempo.`
+        : `Te faltan ${st.kmNeededToPeak} km para llegar a tu carrera larga máxima de ${st.peakTargetKm} km (semana ${st.peakWeek.week}, ${st.weeksToPeak} semana(s) a partir de hoy). Con incrementos del 10% semanal en tu carrera larga, es una meta alcanzable si mantienes constancia.`)
     : '';
 
+  const riegelReliability = !st.longest ? ''
+    : st.longest.distanceKm >= 21 ? ' Al venir de una distancia de medio maratón o más, esta es la proyección más confiable que da Riegel.'
+    : st.longest.distanceKm >= 15 ? ' Ojo: viene de una distancia todavía bastante menor al maratón, así que tómala con reserva moderada — se vuelve más precisa conforme corras más largo.'
+    : ' Ojo: es una extrapolación muy amplia (de menos de 15 km a 42.195 km), la fórmula de Riegel pierde precisión en saltos así de grandes — tómala solo como referencia lejana, no como predicción real todavía.';
   const raceProjectionNote = st.projectedRaceSec
-    ? `Con tu carrera más larga hasta ahora (${st.longest.distanceKm} km a ${st.longest.paceStr}), una proyección estimada (fórmula de Riegel) da un tiempo de maratón aproximado de <strong>${secToHMS(st.projectedRaceSec)}</strong>. Esto es solo una estimación matemática con tu nivel actual — normalmente mejora conforme aumentas kilometraje y resistencia de base.`
+    ? `Con tu carrera más larga hasta ahora (${st.longest.distanceKm} km a ${st.longest.paceStr}), una proyección estimada (fórmula de Riegel) da un tiempo de maratón aproximado de <strong>${secToHMS(st.projectedRaceSec)}</strong>. Esto es solo una estimación matemática con tu nivel actual — normalmente mejora conforme aumentas kilometraje y resistencia de base.${riegelReliability}`
     : `Necesitas al menos una carrera de 5 km o más registrada para calcular una proyección de tiempo de maratón.`;
+
+  const cadenceData = Object.values(S.activities)
+    .filter(a => a.avgCadence)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(a => ({ date: a.date, cadence: Math.round(a.avgCadence * 2) }));
+  if (cadenceData.length >= 2) setTimeout(() => drawCadenceChart(cadenceData), 0);
+
+  const efData = computeEFData();
+  if (efData.length >= 2) setTimeout(() => drawEFChart(efData), 0);
+  let efDeltaNote = '';
+  if (efData.length >= 3) {
+    const first = efData[0].ef, last = efData[efData.length - 1].ef;
+    const pctChange = (((last - first) / first) * 100).toFixed(1);
+    efDeltaNote = ` Vas ${pctChange > 0 ? '+' : ''}${pctChange}% desde tu primer registro comparable.`;
+  }
 
   return `
     <div class="card" style="margin-top:20px;">
@@ -1058,6 +1315,25 @@ function renderProgressSection() {
         ${peakProjection ? `<div style="font-size:13px;color:rgba(255,255,255,0.75);line-height:1.5;">${peakProjection}</div>` : ''}
       </div>
 
+      ${cadenceData.length >= 2 ? `
+      <div class="dashed-rule"></div>
+      <div style="margin-top:12px;">
+        <div class="eyebrow" style="margin-bottom:8px;">Cadencia por carrera</div>
+        <div class="chart-card"><canvas id="cadenceCanvas" style="width:100%;height:100%;"></canvas></div>
+      </div>` : ''}
+
+      ${efData.length >= 2 ? `
+      <div class="dashed-rule"></div>
+      <div style="margin-top:12px;">
+        <div class="eyebrow" style="margin-bottom:8px;">Eficiencia aeróbica (Factor EF)</div>
+        <div class="chart-card"><canvas id="efCanvas" style="width:100%;height:100%;"></canvas></div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:8px;line-height:1.5;">
+          EF = velocidad ÷ FC promedio, solo en trotes normales y carreras largas (excluye intervalos y carreras de competencia). Si sube con el tiempo, corres más rápido con el mismo esfuerzo cardiaco — eso es mejora aeróbica real.${efDeltaNote}
+        </div>
+      </div>` : ''}
+
+      ${renderPRsBlock()}
+
       <div class="dashed-rule"></div>
 
       <div style="margin-top:12px;">
@@ -1066,11 +1342,128 @@ function renderProgressSection() {
           <li style="color:${growthWarning ? '#f87171' : 'inherit'};">${growthNote}</li>
           ${complianceNote ? `<li>${complianceNote}</li>` : ''}
           ${cadenceNote ? `<li>${cadenceNote}</li>` : ''}
-          <li>Sigue combinando fuerza 2x/semana — con 92 kg de base, protege articulaciones y sostiene el volumen que se viene.</li>
+          <li>Sigue combinando fuerza 2x/semana — protege articulaciones y sostiene el volumen que se viene.</li>
         </ul>
       </div>
     </div>
   `;
+}
+
+function drawCadenceChart(data) {
+  const canvas = document.getElementById('cadenceCanvas');
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const w = rect.width, h = rect.height;
+  const pad = { top: 10, right: 10, bottom: 20, left: 34 };
+  const REF = 170; // cadencia mínima recomendada
+  const values = data.map(d => d.cadence);
+  const min = Math.min(...values, REF) - 5;
+  const max = Math.max(...values, REF) + 5;
+  const xStep = (w - pad.left - pad.right) / Math.max(1, data.length - 1);
+  const yFor = (val) => h - pad.bottom - ((val - min) / (max - min)) * (h - pad.top - pad.bottom);
+  const xFor = (i) => pad.left + i * xStep;
+
+  ctx.clearRect(0, 0, w, h);
+
+  // línea de referencia a 170 spm
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(pad.left, yFor(REF));
+  ctx.lineTo(w - pad.right, yFor(REF));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = '10px Inter, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(max.toFixed(0), pad.left - 6, yFor(max) + 4);
+  ctx.fillText(min.toFixed(0), pad.left - 6, yFor(min) + 4);
+
+  ctx.strokeStyle = '#4ade80';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  data.forEach((d, i) => {
+    const x = xFor(i), y = yFor(d.cadence);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  data.forEach((d, i) => {
+    const x = xFor(i), y = yFor(d.cadence);
+    ctx.fillStyle = '#4ade80';
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+    if (i === 0 || i === data.length - 1 || data.length <= 5) {
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.fillText(fmtShort(new Date(d.date + 'T00:00:00')), x, h - 4);
+    }
+  });
+}
+
+function drawEFChart(data) {
+  const canvas = document.getElementById('efCanvas');
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const w = rect.width, h = rect.height;
+  const pad = { top: 10, right: 10, bottom: 20, left: 34 };
+  const baseline = data[0].ef; // tu primer registro comparable, como referencia
+  const values = data.map(d => d.ef);
+  const min = Math.min(...values, baseline) - 0.05;
+  const max = Math.max(...values, baseline) + 0.05;
+  const xStep = (w - pad.left - pad.right) / Math.max(1, data.length - 1);
+  const yFor = (val) => h - pad.bottom - ((val - min) / (max - min)) * (h - pad.top - pad.bottom);
+  const xFor = (i) => pad.left + i * xStep;
+
+  ctx.clearRect(0, 0, w, h);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(pad.left, yFor(baseline));
+  ctx.lineTo(w - pad.right, yFor(baseline));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = '10px Inter, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(max.toFixed(2), pad.left - 6, yFor(max) + 4);
+  ctx.fillText(min.toFixed(2), pad.left - 6, yFor(min) + 4);
+
+  ctx.strokeStyle = '#c084fc';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  data.forEach((d, i) => {
+    const x = xFor(i), y = yFor(d.ef);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  data.forEach((d, i) => {
+    const x = xFor(i), y = yFor(d.ef);
+    ctx.fillStyle = '#c084fc';
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+    if (i === 0 || i === data.length - 1 || data.length <= 5) {
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.fillText(fmtShort(new Date(d.date + 'T00:00:00')), x, h - 4);
+    }
+  });
 }
 
 function renderPlan() {
@@ -1175,7 +1568,7 @@ function renderCalendar() {
     <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
       <div>
         <div style="font-size:13px;font-weight:600;">${fmtShort(new Date(a.date + 'T00:00:00'))}</div>
-        <div style="font-size:11px;color:rgba(255,255,255,0.5);">${a.name}</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);">${escapeHtml(a.name)}</div>
       </div>
       <div style="text-align:right;">
         <div style="font-size:13px;color:#FFCC00;font-weight:700;">${a.distanceKm} km</div>
@@ -1231,7 +1624,7 @@ function renderCalendar() {
    RENDER: PESO
 --------------------------------------------------------------- */
 function renderPeso() {
-  const startWeight = 92;
+  const startWeight = S.weightSettings.startWeight;
   const monthDays = WEIGH_DAYS.filter(d => d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth());
   const chartData = Object.entries(S.weighIns).sort(([a],[b]) => a < b ? -1 : 1)
     .map(([date, weight]) => ({ date, weight: parseFloat(weight) }));
@@ -1256,7 +1649,7 @@ function renderPeso() {
         ${isFuture
           ? `<div style="font-size:12px;color:rgba(255,255,255,0.4);">Próximo</div>`
           : `<div style="display:flex;align-items:center;gap:6px;">
-              <input type="number" step="0.1" inputmode="decimal" placeholder="—" value="${val}" data-weight-date="${dateStr}">
+              <input type="number" step="0.1" min="30" max="300" inputmode="decimal" placeholder="—" value="${val}" data-weight-date="${dateStr}">
               <span style="font-size:12px;color:rgba(255,255,255,0.4);">kg</span>
             </div>`}
       </div>
@@ -1272,7 +1665,7 @@ function renderPeso() {
       <div style="font-size:12px;color:rgba(255,255,255,0.5);margin-bottom:16px;">Registra tu peso para ver tu progreso</div>
 
       <div class="peso-stats">
-        <div class="peso-stat"><div class="l">Inicial</div><div class="v font-display">${startWeight}</div><div class="u">kg</div></div>
+        <div class="peso-stat"><div class="l">Inicial <button data-weightsettings-edit="1" style="font-size:9px;color:rgba(255,255,255,0.4);text-decoration:underline;">editar</button></div><div class="v font-display">${startWeight}</div><div class="u">kg</div></div>
         <div class="peso-stat"><div class="l">Actual</div><div class="v font-display" style="color:#FFCC00;">${lastWeight}</div><div class="u">kg</div></div>
         <div class="peso-stat"><div class="l">Cambio</div><div class="v font-display" style="color:${delta<=0?'#4ade80':'#f87171'};">${delta > 0 ? '+' : ''}${delta}</div><div class="u">kg</div></div>
       </div>
@@ -1285,6 +1678,33 @@ function renderPeso() {
       </div>
     </div>
   `;
+}
+
+function openWeightSettingsModal() {
+  const root = document.getElementById('modalRoot');
+  root.innerHTML = `
+    <div class="modal-overlay" data-modal-overlay="1">
+      <div class="modal-sheet">
+        <div class="modal-head">
+          <div class="t font-display">Peso inicial</div>
+          <button class="modal-close" data-modal-close="1">${icon('x',18)}</button>
+        </div>
+        <div class="modal-desc">Este es el peso base contra el que se compara tu "cambio" en Inicio y en Peso. Cámbialo si no era correcto.</div>
+        <div class="gh-label">Peso inicial (kg)</div>
+        <input type="number" step="0.1" min="30" max="300" id="startWeightInput" class="gh-input" value="${S.weightSettings.startWeight}">
+        <button class="modal-btn" data-weightsettings-save="1">Guardar</button>
+      </div>
+    </div>
+  `;
+}
+
+function saveWeightSettings() {
+  const val = parseFloat(document.getElementById('startWeightInput').value);
+  if (val > 0) S.weightSettings.startWeight = val;
+  persist();
+  document.getElementById('modalRoot').innerHTML = '';
+  showToast('Peso inicial actualizado ✅');
+  render();
 }
 
 function drawWeightChart(data, startWeight) {
@@ -1348,6 +1768,30 @@ function drawWeightChart(data, startWeight) {
   });
 }
 
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
+function backupPayloadObject() {
+  return {
+    runDays: S.runDays, weighIns: S.weighIns, sessionsDone: S.sessionsDone,
+    activities: S.activities, shoes: S.shoes, weightSettings: S.weightSettings,
+    races: S.races,
+    exportedAt: new Date().toISOString(),
+  };
+}
+
+function applyRestoredData(parsed) {
+  if (Array.isArray(parsed.runDays)) S.runDays = parsed.runDays;
+  if (parsed.weighIns && typeof parsed.weighIns === 'object') S.weighIns = parsed.weighIns;
+  if (parsed.sessionsDone && typeof parsed.sessionsDone === 'object') S.sessionsDone = parsed.sessionsDone;
+  if (parsed.activities && typeof parsed.activities === 'object') S.activities = parsed.activities;
+  if (parsed.shoes && typeof parsed.shoes === 'object') S.shoes = { ...S.shoes, ...parsed.shoes };
+  if (parsed.weightSettings && typeof parsed.weightSettings === 'object') S.weightSettings = { ...S.weightSettings, ...parsed.weightSettings };
+  if (Array.isArray(parsed.races)) S.races = parsed.races;
+}
+
 /* ---------------------------------------------------------------
    GOOGLE DRIVE BACKUP
    Requiere un Client ID de Google Cloud Console (OAuth, tipo "Aplicación
@@ -1400,10 +1844,7 @@ async function backupToGoogleDrive() {
 
   try {
     const token = await gdriveGetToken();
-    const payload = JSON.stringify({
-      runDays: S.runDays, weighIns: S.weighIns, sessionsDone: S.sessionsDone,
-      exportedAt: new Date().toISOString(),
-    }, null, 2);
+    const payload = JSON.stringify(backupPayloadObject(), null, 2);
 
     let fileId = S.googleDrive.fileId;
 
@@ -1448,6 +1889,51 @@ async function backupToGoogleDrive() {
   } catch (e) {
     S.googleDrive.error = 'No se pudo guardar en Google Drive';
     showToast('No se pudo guardar en Google Drive');
+  } finally {
+    S.googleDrive.syncing = false;
+    await persist();
+    render();
+  }
+}
+
+async function restoreFromGoogleDrive() {
+  if (!gdriveConfigured()) { openGoogleDriveInfoModal(); return; }
+  const ok = window.confirm('Esto va a reemplazar tu progreso actual en este dispositivo con el último respaldo guardado en Drive. ¿Continuar?');
+  if (!ok) return;
+
+  S.googleDrive.syncing = true;
+  S.googleDrive.error = null;
+  render();
+
+  try {
+    const token = await gdriveGetToken();
+    let fileId = S.googleDrive.fileId;
+
+    if (!fileId) {
+      const searchRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent("name='runner-backup.json' and trashed=false")}&spaces=drive&fields=files(id,name)`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (searchRes.ok) {
+        const searchData = await searchRes.json();
+        if (searchData.files && searchData.files[0]) fileId = searchData.files[0].id;
+      }
+    }
+    if (!fileId) throw new Error('No se encontró ningún respaldo en tu Drive todavía');
+
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error('No se pudo descargar el respaldo');
+    const data = await res.json();
+    applyRestoredData(data);
+
+    S.googleDrive.fileId = fileId;
+    S.googleDrive.error = null;
+    showToast('Progreso restaurado desde Google Drive ✅');
+  } catch (e) {
+    S.googleDrive.error = e.message || 'No se pudo restaurar desde Drive';
+    showToast(S.googleDrive.error);
   } finally {
     S.googleDrive.syncing = false;
     await persist();
@@ -1589,7 +2075,7 @@ async function uploadToGithub() {
 --------------------------------------------------------------- */
 function openBackupModal(mode) {
   const root = document.getElementById('modalRoot');
-  const dataStr = JSON.stringify({ runDays: S.runDays, weighIns: S.weighIns, sessionsDone: S.sessionsDone });
+  const dataStr = JSON.stringify(backupPayloadObject());
   root.innerHTML = `
     <div class="modal-overlay" data-modal-overlay="1">
       <div class="modal-sheet">
@@ -1613,9 +2099,7 @@ function openBackupModal(mode) {
 function restoreBackup(text) {
   try {
     const parsed = JSON.parse(text);
-    S.runDays = Array.isArray(parsed.runDays) ? parsed.runDays : [];
-    S.weighIns = parsed.weighIns && typeof parsed.weighIns === 'object' ? parsed.weighIns : {};
-    S.sessionsDone = parsed.sessionsDone && typeof parsed.sessionsDone === 'object' ? parsed.sessionsDone : {};
+    applyRestoredData(parsed);
     persist();
     document.getElementById('modalRoot').innerHTML = '';
     showToast('Respaldo restaurado ✅');
@@ -1731,6 +2215,9 @@ document.addEventListener('click', (e) => {
   const gdriveBtn = e.target.closest('[data-gdrive-backup]');
   if (gdriveBtn) { backupToGoogleDrive(); return; }
 
+  const gdriveRestoreBtn = e.target.closest('[data-gdrive-restore]');
+  if (gdriveRestoreBtn) { restoreFromGoogleDrive(); return; }
+
   const openUpdateBtn = e.target.closest('[data-open-update]');
   if (openUpdateBtn) { openGithubUpdateModal(); return; }
 
@@ -1755,6 +2242,24 @@ document.addEventListener('click', (e) => {
 
   const shoeResetBtn = e.target.closest('[data-shoe-reset-today]');
   if (shoeResetBtn) { resetShoeToday(); return; }
+
+  const weightSettingsEditBtn = e.target.closest('[data-weightsettings-edit]');
+  if (weightSettingsEditBtn) { openWeightSettingsModal(); return; }
+
+  const weightSettingsSaveBtn = e.target.closest('[data-weightsettings-save]');
+  if (weightSettingsSaveBtn) { saveWeightSettings(); return; }
+
+  const raceAddBtn = e.target.closest('[data-race-add]');
+  if (raceAddBtn) { openRaceModal(null); return; }
+
+  const raceEditBtn = e.target.closest('[data-race-edit]');
+  if (raceEditBtn) { openRaceModal(raceEditBtn.dataset.raceEdit); return; }
+
+  const raceSaveBtn = e.target.closest('[data-race-save]');
+  if (raceSaveBtn) { saveRace(raceSaveBtn.dataset.raceId || null); return; }
+
+  const raceDeleteBtn = e.target.closest('[data-race-delete]');
+  if (raceDeleteBtn) { deleteRace(raceDeleteBtn.dataset.raceId); return; }
 });
 
 document.addEventListener('change', (e) => {
@@ -1782,6 +2287,12 @@ document.addEventListener('change', (e) => {
     };
     reader.onerror = () => showToast('No se pudo leer el archivo');
     reader.readAsText(file, 'UTF-8');
+    return;
+  }
+
+  if (e.target.id === 'raceDistanceSelect') {
+    const customInput = document.getElementById('raceDistanceCustom');
+    if (customInput) customInput.style.display = e.target.value === 'custom' ? 'block' : 'none';
   }
 });
 
