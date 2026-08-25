@@ -1384,20 +1384,32 @@ function renderProgressSection() {
       ${cadenceData.length >= 2 ? `
       <div class="dashed-rule"></div>
       <div style="margin-top:12px;">
-        <div class="eyebrow" style="margin-bottom:8px;">Cadencia por carrera</div>
+        <div class="eyebrow" style="margin-bottom:4px;">Cadencia por carrera</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:8px;">Pasos por minuto (ambos pies). El número junto a cada punto es tu cadencia real de esa carrera.</div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:6px;">
+          <span><span style="color:#4ade80;">●</span> Tu cadencia</span>
+          <span><span style="color:rgba(255,255,255,0.55);">┄</span> Mínimo recomendado (170)</span>
+          <span><span style="color:#7dd3fc;">┄</span> Tu tendencia</span>
+        </div>
         <div class="chart-card"><canvas id="cadenceCanvas" style="width:100%;height:100%;"></canvas></div>
         <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:8px;line-height:1.5;">
-          Línea punteada = 170 spm (mínimo recomendado). Línea sólida clara = tu tendencia ajustada por regresión, no solo el primer/último dato.${cadenceTrendNote}
+          La línea celeste es tu tendencia real calculada con todos tus datos (no solo el primero y el último), así que un mal día aislado no la distorsiona.${cadenceTrendNote}
         </div>
       </div>` : ''}
 
       ${efData.length >= 2 ? `
       <div class="dashed-rule"></div>
       <div style="margin-top:12px;">
-        <div class="eyebrow" style="margin-bottom:8px;">Eficiencia aeróbica (Factor EF)</div>
+        <div class="eyebrow" style="margin-bottom:4px;">Eficiencia aeróbica (Factor EF)</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:8px;">EF = tu velocidad ÷ tu FC promedio. Si el número sube, corres más rápido con el mismo esfuerzo cardiaco — así se ve la mejora aeróbica en la práctica.</div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:6px;">
+          <span><span style="color:#c084fc;">●</span> Tu EF por carrera</span>
+          <span><span style="color:rgba(255,255,255,0.55);">┄</span> Tu punto de partida</span>
+          <span><span style="color:#7dd3fc;">┄</span> Tu tendencia</span>
+        </div>
         <div class="chart-card"><canvas id="efCanvas" style="width:100%;height:100%;"></canvas></div>
         <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:8px;line-height:1.5;">
-          EF = velocidad ÷ FC promedio, solo en trotes normales y carreras largas (excluye intervalos y carreras de competencia). Si sube con el tiempo, corres más rápido con el mismo esfuerzo cardiaco — eso es mejora aeróbica real.${efDeltaNote}
+          Solo cuenta trotes normales y carreras largas (excluye intervalos y competencias), para comparar esfuerzos parecidos entre sí.${efDeltaNote}
         </div>
       </div>` : ''}
 
@@ -1429,44 +1441,51 @@ function drawCadenceChart(data, trend) {
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
   const w = rect.width, h = rect.height;
-  const pad = { top: 10, right: 10, bottom: 20, left: 34 };
+  const pad = { top: 22, right: 12, bottom: 20, left: 32 };
   const REF = 170; // cadencia mínima recomendada
   const values = data.map(d => d.cadence);
-  const min = Math.min(...values, REF) - 5;
-  const max = Math.max(...values, REF) + 5;
+  const min = Math.min(...values, REF) - 6;
+  const max = Math.max(...values, REF) + 6;
   const xStep = (w - pad.left - pad.right) / Math.max(1, data.length - 1);
   const yFor = (val) => h - pad.bottom - ((val - min) / (max - min)) * (h - pad.top - pad.bottom);
   const xFor = (i) => pad.left + i * xStep;
 
   ctx.clearRect(0, 0, w, h);
 
-  // línea de referencia a 170 spm
-  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  // líneas guía horizontales con su valor, para leer el eje sin adivinar
+  ctx.font = '9px Inter, sans-serif';
+  ctx.textAlign = 'right';
+  const gridSteps = 3;
+  for (let g = 0; g <= gridSteps; g++) {
+    const val = min + ((max - min) / gridSteps) * g;
+    const y = yFor(val);
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(w - pad.right, y);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillText(val.toFixed(0), pad.left - 6, y + 3);
+  }
+
+  // línea de referencia a 170 spm (mínimo recomendado), etiquetada directo
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 1.5;
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
   ctx.moveTo(pad.left, yFor(REF));
   ctx.lineTo(w - pad.right, yFor(REF));
   ctx.stroke();
   ctx.setLineDash([]);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = '9px Inter, sans-serif';
+  ctx.fillText('170 mínimo', pad.left + 2, yFor(REF) - 4);
 
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.font = '10px Inter, sans-serif';
-  ctx.textAlign = 'right';
-  ctx.fillText(max.toFixed(0), pad.left - 6, yFor(max) + 4);
-  ctx.fillText(min.toFixed(0), pad.left - 6, yFor(min) + 4);
-
-  ctx.strokeStyle = '#4ade80';
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  data.forEach((d, i) => {
-    const x = xFor(i), y = yFor(d.cadence);
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-
-  // línea de tendencia (regresión lineal), solo si hay suficientes puntos
+  // línea de tendencia (regresión lineal) en color distinto para no confundirla con la de arriba
   if (trend && data.length >= 4) {
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.strokeStyle = '#7dd3fc';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([2, 3]);
     ctx.beginPath();
@@ -1476,15 +1495,36 @@ function drawCadenceChart(data, trend) {
     ctx.setLineDash([]);
   }
 
-  ctx.textAlign = 'center';
+  // tu cadencia real, carrera por carrera
+  ctx.strokeStyle = '#4ade80';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  data.forEach((d, i) => {
+    const x = xFor(i), y = yFor(d.cadence);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  const showAllLabels = data.length <= 8;
   data.forEach((d, i) => {
     const x = xFor(i), y = yFor(d.cadence);
     ctx.fillStyle = '#4ade80';
     ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.arc(x, y, 3.5, 0, Math.PI * 2);
     ctx.fill();
+
+    // valor numérico encima de cada punto — sin esto no se puede leer el dato real
+    if (showAllLabels || i === 0 || i === data.length - 1) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#4ade80';
+      ctx.font = 'bold 10px Inter, sans-serif';
+      ctx.fillText(d.cadence.toFixed(0), x, y - 8);
+    }
+
     if (i === 0 || i === data.length - 1 || data.length <= 5) {
+      ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.font = '9px Inter, sans-serif';
       ctx.fillText(fmtShort(new Date(d.date + 'T00:00:00')), x, h - 4);
     }
   });
@@ -1500,30 +1540,59 @@ function drawEFChart(data, trend) {
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
   const w = rect.width, h = rect.height;
-  const pad = { top: 10, right: 10, bottom: 20, left: 34 };
+  const pad = { top: 22, right: 12, bottom: 20, left: 34 };
   const baseline = data[0].ef; // tu primer registro comparable, como referencia
   const values = data.map(d => d.ef);
-  const min = Math.min(...values, baseline) - 0.05;
-  const max = Math.max(...values, baseline) + 0.05;
+  const min = Math.min(...values, baseline) - 0.06;
+  const max = Math.max(...values, baseline) + 0.06;
   const xStep = (w - pad.left - pad.right) / Math.max(1, data.length - 1);
   const yFor = (val) => h - pad.bottom - ((val - min) / (max - min)) * (h - pad.top - pad.bottom);
   const xFor = (i) => pad.left + i * xStep;
 
   ctx.clearRect(0, 0, w, h);
 
-  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  // líneas guía horizontales con su valor
+  ctx.font = '9px Inter, sans-serif';
+  ctx.textAlign = 'right';
+  const gridSteps = 3;
+  for (let g = 0; g <= gridSteps; g++) {
+    const val = min + ((max - min) / gridSteps) * g;
+    const y = yFor(val);
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(w - pad.right, y);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillText(val.toFixed(2), pad.left - 6, y + 3);
+  }
+
+  // tu punto de partida, etiquetado directo
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 1.5;
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
   ctx.moveTo(pad.left, yFor(baseline));
   ctx.lineTo(w - pad.right, yFor(baseline));
   ctx.stroke();
   ctx.setLineDash([]);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = '9px Inter, sans-serif';
+  ctx.fillText('tu punto de partida', pad.left + 2, yFor(baseline) - 4);
 
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.font = '10px Inter, sans-serif';
-  ctx.textAlign = 'right';
-  ctx.fillText(max.toFixed(2), pad.left - 6, yFor(max) + 4);
-  ctx.fillText(min.toFixed(2), pad.left - 6, yFor(min) + 4);
+  // línea de tendencia en color distinto a la de arriba
+  if (trend && data.length >= 4) {
+    ctx.strokeStyle = '#7dd3fc';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(xFor(0), yFor(trend.intercept));
+    ctx.lineTo(xFor(data.length - 1), yFor(trend.intercept + trend.slope * (data.length - 1)));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
   ctx.strokeStyle = '#c084fc';
   ctx.lineWidth = 2.5;
@@ -1534,26 +1603,25 @@ function drawEFChart(data, trend) {
   });
   ctx.stroke();
 
-  if (trend && data.length >= 4) {
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([2, 3]);
-    ctx.beginPath();
-    ctx.moveTo(xFor(0), yFor(trend.intercept));
-    ctx.lineTo(xFor(data.length - 1), yFor(trend.intercept + trend.slope * (data.length - 1)));
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  ctx.textAlign = 'center';
+  const showAllLabels = data.length <= 8;
   data.forEach((d, i) => {
     const x = xFor(i), y = yFor(d.ef);
     ctx.fillStyle = '#c084fc';
     ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.arc(x, y, 3.5, 0, Math.PI * 2);
     ctx.fill();
+
+    if (showAllLabels || i === 0 || i === data.length - 1) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#c084fc';
+      ctx.font = 'bold 10px Inter, sans-serif';
+      ctx.fillText(d.ef.toFixed(2), x, y - 8);
+    }
+
     if (i === 0 || i === data.length - 1 || data.length <= 5) {
+      ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.font = '9px Inter, sans-serif';
       ctx.fillText(fmtShort(new Date(d.date + 'T00:00:00')), x, h - 4);
     }
   });
