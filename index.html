@@ -1499,9 +1499,6 @@ function drawCadenceChart(data, trend) {
   ctx.lineTo(w - pad.right, yFor(REF));
   ctx.stroke();
   ctx.setLineDash([]);
-  ctx.textAlign = 'left';
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  ctx.fillText('170 mínimo', pad.left + 2, yFor(REF) - 5);
 
   // línea de tendencia (regresión lineal) en color distinto para no confundirla con la de arriba
   if (trend && data.length >= 4) {
@@ -1616,9 +1613,6 @@ function drawEFChart(data, trend) {
   ctx.lineTo(w - pad.right, yFor(baseline));
   ctx.stroke();
   ctx.setLineDash([]);
-  ctx.textAlign = 'left';
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  ctx.fillText('punto de partida', pad.left + 2, yFor(baseline) - 5);
 
   // línea de tendencia — solo con 4+ carreras, en celeste para no confundirla
   if (trend && data.length >= 4) {
