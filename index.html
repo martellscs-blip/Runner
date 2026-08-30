@@ -846,12 +846,14 @@ function renderStravaCard() {
 function renderRecentActivities() {
   const acts = Object.values(S.activities).sort((a, b) => b.startLocal.localeCompare(a.startLocal)).slice(0, 5);
   if (!acts.length) return '';
-  const rows = acts.map(a => `
+  const rows = acts.map(a => {
+    const plan = getPlanLabelForDate(a.date);
+    return `
     <div class="card" style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
-          <div style="font-size:13px;font-weight:700;">${escapeHtml(a.name)}</div>
-          <div style="font-size:11px;color:rgba(255,255,255,0.5);">${fmtShort(new Date(a.date + 'T00:00:00'))} · ${a.sportType}</div>
+          <div style="font-size:13px;font-weight:700;">${plan ? `${escapeHtml(plan.phase)} · ${plan.dayLabel}` : 'Entrenamiento libre'}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);">${plan ? `Semana ${plan.week}${plan.madeUp ? ' · repuesta 🔁' : ''} · ` : ''}${fmtShort(new Date(a.date + 'T00:00:00'))} · ${escapeHtml(a.name)}</div>
         </div>
         <div style="text-align:right;">
           <div class="font-display" style="font-size:16px;color:#FFCC00;">${a.distanceKm} km</div>
@@ -867,7 +869,8 @@ function renderRecentActivities() {
         ${a.avgCadence ? `<span>👟 ${Math.round(a.avgCadence * 2)} spm</span>` : ''}
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
   return `
     <div class="section">
       <div class="eyebrow">Últimas actividades (Strava)</div>
@@ -1152,6 +1155,31 @@ function getTodayPlannedSession() {
   const items = [[1,w.day1Date,w.day1],[2,w.day2Date,w.day2],[3,w.day3Date,w.day3]];
   const hit = items.find(([idx,d]) => fmt(d) === fmt(today));
   return hit ? { week:w, dayIdx:hit[0], date:hit[1], text:hit[2], key:`${w.week}-${hit[0]}` } : null;
+}
+
+function getPlanLabelForDate(dateStr) {
+  // Traduce una fecha a la etiqueta del plan (semana, fase, tipo de día) —
+  // así "Detalle por día" y "Últimas actividades" muestran lo que dice TU
+  // plan para ese día, no el nombre libre que le puso Strava.
+  const dayLabelFor = (n) => n === 1 ? 'Día 1 · Fácil' : n === 2 ? 'Día 2 · Calidad' : 'Día 3 · Larga';
+
+  // 1) ¿Coincide exacto con un día asignado del plan?
+  for (const w of PLAN) {
+    if (fmt(w.day1Date) === dateStr) return { week: w.week, phase: w.phase, dayLabel: dayLabelFor(1), madeUp: false };
+    if (fmt(w.day2Date) === dateStr) return { week: w.week, phase: w.phase, dayLabel: dayLabelFor(2), madeUp: false };
+    if (fmt(w.day3Date) === dateStr) return { week: w.week, phase: w.phase, dayLabel: dayLabelFor(3), madeUp: false };
+  }
+
+  // 2) ¿Esta fecha repuso una sesión de una semana atrasada?
+  for (const key in S.madeUpSessions) {
+    const m = S.madeUpSessions[key];
+    if (m.date === dateStr) {
+      const w = PLAN.find(pw => pw.week === m.weekAssigned);
+      if (w) return { week: w.week, phase: w.phase, dayLabel: dayLabelFor(m.dayAssigned), madeUp: true };
+    }
+  }
+
+  return null;
 }
 
 function renderTodayCard(daysRunCount, lastWeight, hasWeights, delta) {
@@ -2069,7 +2097,7 @@ function renderCalendar() {
     const dateStr = fmt(dt);
     const isRun = S.runDays.includes(dateStr);
     const isToday = dateStr === fmt(today);
-    const isWeighDay = dt.getDay() === 1;
+    const isWeighDay = S.weighIns[dateStr] !== undefined;
     cells += `
       <button class="cal-day ${isRun ? 'run' : ''} ${isToday ? 'today' : ''}" data-toggle-day="${dateStr}">
         ${isRun ? icon('zap', 14, '#000').replace('stroke-width="2"','stroke-width="3"') : d}
@@ -2089,18 +2117,21 @@ function renderCalendar() {
 
   const monthKm = +monthActivities.reduce((sum, a) => sum + a.distanceKm, 0).toFixed(1);
 
-  const activityRows = monthActivities.map(a => `
+  const activityRows = monthActivities.map(a => {
+    const plan = getPlanLabelForDate(a.date);
+    return `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
       <div>
         <div style="font-size:13px;font-weight:600;">${fmtShort(new Date(a.date + 'T00:00:00'))}</div>
-        <div style="font-size:11px;color:rgba(255,255,255,0.5);">${escapeHtml(a.name)}</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);">${plan ? `${escapeHtml(plan.phase)} · ${plan.dayLabel}${plan.madeUp ? ' 🔁' : ''}` : escapeHtml(a.name)}</div>
       </div>
       <div style="text-align:right;">
         <div style="font-size:13px;color:#FFCC00;font-weight:700;">${a.distanceKm} km</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.5);">${a.paceStr}</div>
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 
   return `
     <div class="px5 section">
