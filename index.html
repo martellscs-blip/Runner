@@ -809,6 +809,7 @@ let showTipsText = false;
 let showCoachRecs = false;
 let showCadenceTips = false;
 let showHrTips = false;
+let showBackfillWeigh = false;
 function showToast(msg) {
   const root = document.getElementById('toastRoot');
   root.innerHTML = `<div class="toast">${msg}</div>`;
@@ -2161,7 +2162,6 @@ function renderCalendar() {
 --------------------------------------------------------------- */
 function renderPeso() {
   const startWeight = S.weightSettings.startWeight;
-  const monthDays = WEIGH_DAYS.filter(d => d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth());
   const chartData = Object.entries(S.weighIns)
     .filter(([date]) => date <= fmt(today))
     .sort(([a],[b]) => a < b ? -1 : 1)
@@ -2190,40 +2190,43 @@ function renderPeso() {
     weightProjection = `A esta tendencia, llegarías aproximadamente a ${targetWeight} kg en ${fmtShort(projected)}.`;
   }
 
-  const monthName = MONTHS_ES[today.getMonth()];
-  const monthLabel = `${monthName.charAt(0).toUpperCase()}${monthName.slice(1)} ${today.getFullYear()}`;
+  const todayStr = fmt(today);
+  const todayVal = S.weighIns[todayStr] !== undefined ? S.weighIns[todayStr] : '';
+  const isMonday = today.getDay() === 1;
 
-  const rows = monthDays.map(d => {
-    const dateStr = fmt(d);
-    const isToday = dateStr === fmt(today);
-    const isFuture = d > today;
-    const dayLabel = 'Lunes';
-    const val = S.weighIns[dateStr] !== undefined ? S.weighIns[dateStr] : '';
-    return `
-      <div class="weigh-row ${isToday ? 'today' : ''} ${isFuture ? 'future' : ''}">
-        <div>
-          <div class="day">${dayLabel} ${isToday ? '<span style="color:#FFCC00;">· Hoy</span>' : ''}</div>
-          <div class="date">${fmtShort(d)}</div>
-        </div>
-        ${isFuture
-          ? `<div style="font-size:12px;color:rgba(255,255,255,0.4);">Próximo</div>`
-          : `<div style="display:flex;align-items:center;gap:6px;">
-              <input type="number" step="0.1" min="30" max="300" inputmode="decimal" placeholder="—" value="${val}" data-weight-date="${dateStr}">
-              <span style="font-size:12px;color:rgba(255,255,255,0.4);">kg</span>
-            </div>`}
+  // Historial real: solo los días que de verdad registraste, más reciente arriba.
+  // Nada de renglones vacíos de "próximo lunes" — eso es justo lo que se sentía rígido.
+  const history = chartData.slice().reverse().slice(0, 12);
+  const historyRows = history.map(d => `
+    <div class="weigh-row" style="margin-bottom:8px;">
+      <div>
+        <div class="day">${fmtShort(new Date(d.date + 'T00:00:00'))}${d.date === todayStr ? ' <span style="color:#FFCC00;">· Hoy</span>' : ''}</div>
+        <div class="date">${new Date(d.date + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'long' })}</div>
       </div>
-    `;
-  }).join('');
+      <div style="display:flex;align-items:center;gap:6px;">
+        <input type="number" step="0.1" min="30" max="300" inputmode="decimal" value="${d.weight}" data-weight-date="${d.date}">
+        <span style="font-size:12px;color:rgba(255,255,255,0.4);">kg</span>
+      </div>
+    </div>
+  `).join('');
 
   setTimeout(() => drawWeightChart(chartData, startWeight), 0);
 
   return `
     <div class="px5 section">
       <div class="eyebrow">Control de peso</div>
-      <div class="phase font-display" style="font-size:20px;margin-bottom:4px;">Cada lunes</div>
-      <div style="font-size:12px;color:rgba(255,255,255,0.5);margin-bottom:16px;">Registra tu peso para ver tu progreso</div>
+      <div style="font-size:12px;color:rgba(255,255,255,0.5);margin-bottom:16px;">Registra tu peso el día que quieras, no solo un día fijo</div>
 
-      <div class="peso-stats">
+      <div class="backup-card" style="border-color:rgba(255,204,0,.32);margin-top:0;">
+        <div class="eyebrow" style="margin-bottom:2px;">¿Cuánto pesas hoy?</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-bottom:10px;">${fmtShort(today)} · ${isMonday ? 'Hoy es tu día habitual — ideal para comparar semana a semana.' : 'Hoy no es lunes, pero puedes registrar igual.'}</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input type="number" step="0.1" min="30" max="300" inputmode="decimal" placeholder="Ej. 88.5" value="${todayVal}" data-weight-date="${todayStr}" style="flex:1;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:12px;color:#FFCC00;font-size:19px;font-family:'Oswald',sans-serif;font-weight:700;">
+          <span style="font-size:13px;color:rgba(255,255,255,0.5);flex-shrink:0;">kg</span>
+        </div>
+      </div>
+
+      <div class="peso-stats" style="margin-top:16px;">
         <div class="peso-stat"><div class="l">Inicial <button data-weightsettings-edit="1" style="font-size:9px;color:rgba(255,255,255,0.4);text-decoration:underline;">editar</button></div><div class="v font-display">${startWeight}</div><div class="u">kg</div></div>
         <div class="peso-stat"><div class="l">Actual</div><div class="v font-display" style="color:#FFCC00;">${lastWeight}</div><div class="u">kg</div></div>
         <div class="peso-stat"><div class="l">Cambio</div><div class="v font-display" style="color:${delta<=0?'#4ade80':'#f87171'};">${delta > 0 ? '+' : ''}${delta}</div><div class="u">kg</div></div>
@@ -2233,9 +2236,23 @@ function renderPeso() {
 
       ${chartData.length >= 2 ? `<div class="chart-card"><canvas id="weightCanvas" style="width:100%;height:100%;"></canvas></div>` : ''}
 
-      <div class="eyebrow">${monthLabel}</div>
-      <div style="margin-top:8px;">
-        ${rows || `<div style="font-size:12px;color:rgba(255,255,255,0.4);text-align:center;padding:20px 0;">No hay pesajes programados este mes.</div>`}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;margin-bottom:4px;">
+        <div class="eyebrow" style="margin-bottom:0;">Tu historial</div>
+        <button data-toggle-backfill-weigh="1" style="font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;">${showBackfillWeigh ? 'Cancelar' : '+ Agregar día anterior'}</button>
+      </div>
+
+      ${showBackfillWeigh ? `
+      <div class="card" style="margin-bottom:12px;">
+        <div class="gh-label" style="margin-top:0;">Fecha</div>
+        <input type="date" id="backfillDateInput" class="gh-input" value="${todayStr}" max="${todayStr}">
+        <div class="gh-label">Peso</div>
+        <input type="number" step="0.1" min="30" max="300" id="backfillWeightInput" class="gh-input" placeholder="Ej. 89.2">
+        <button class="modal-btn" data-backfill-weigh-save="1" style="margin-top:12px;">Guardar</button>
+      </div>
+      ` : ''}
+
+      <div>
+        ${historyRows || `<div style="font-size:12px;color:rgba(255,255,255,0.4);text-align:center;padding:20px 0;">Todavía no tienes pesajes registrados — usa el campo de arriba para empezar.</div>`}
       </div>
     </div>
   `;
@@ -2777,6 +2794,26 @@ document.addEventListener('click', (e) => {
 
   const toggleHrTips = e.target.closest('[data-toggle-hr-tips]');
   if (toggleHrTips) { showHrTips = !showHrTips; render(); return; }
+
+  const toggleBackfillWeigh = e.target.closest('[data-toggle-backfill-weigh]');
+  if (toggleBackfillWeigh) { showBackfillWeigh = !showBackfillWeigh; render(); return; }
+
+  const backfillWeighSave = e.target.closest('[data-backfill-weigh-save]');
+  if (backfillWeighSave) {
+    const dateInput = document.getElementById('backfillDateInput');
+    const weightInput = document.getElementById('backfillWeightInput');
+    const date = dateInput ? dateInput.value : '';
+    const val = weightInput ? parseFloat(weightInput.value) : NaN;
+    if (!date) { showToast('Falta la fecha'); return; }
+    if (!val || val <= 0) { showToast('Falta el peso'); return; }
+    if (date > fmt(today)) { showToast('No puedes registrar una fecha futura'); return; }
+    S.weighIns[date] = val;
+    persist();
+    showBackfillWeigh = false;
+    showToast('Pesaje agregado ✅');
+    render();
+    return;
+  }
 
   const chip = e.target.closest('[data-week]');
   if (chip) { S.selectedWeek = parseInt(chip.dataset.week, 10); render(); return; }
