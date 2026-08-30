@@ -808,6 +808,7 @@ let showProjectionText = false;
 let showTipsText = false;
 let showCoachRecs = false;
 let showCadenceTips = false;
+let showHrTips = false;
 function showToast(msg) {
   const root = document.getElementById('toastRoot');
   root.innerHTML = `<div class="toast">${msg}</div>`;
@@ -1177,6 +1178,19 @@ function renderTodayCard(daysRunCount, lastWeight, hasWeights, delta) {
   else if (shoeUsed >= shoeThreshold * 0.85) { shoeStatus = 'warn'; shoeLabel = 'Cerca del límite'; }
   const shoeColor = shoeStatus === 'danger' ? '#f87171' : shoeStatus === 'warn' ? '#facc15' : '#4ade80';
 
+  // Semáforo de peso: compara tu último pesaje contra el anterior (no contra
+  // el inicial), para reflejar hacia dónde vas ahora mismo, no el cambio total.
+  const loggedWeights = Object.entries(S.weighIns).filter(([d]) => d <= fmt(today)).sort(([a],[b]) => a < b ? -1 : 1);
+  let weightDirection = null;
+  if (loggedWeights.length >= 2) {
+    const prevWeight = parseFloat(loggedWeights[loggedWeights.length - 2][1]);
+    const diff = lastWeight - prevWeight;
+    if (diff > 0.05) weightDirection = 'up';
+    else if (diff < -0.05) weightDirection = 'down';
+    else weightDirection = 'flat';
+  }
+  const weightColor = weightDirection === 'up' ? '#f87171' : weightDirection === 'down' ? '#4ade80' : weightDirection === 'flat' ? '#facc15' : 'rgba(255,255,255,0.25)';
+
   const badge = (iconHtml, bg) => `<div style="width:30px;height:30px;border-radius:50%;background:${bg};display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#FFCC00;">${iconHtml}</div>`;
   const cellLabel = (text) => `<span style="font-size:9.5px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.06em;">${text}</span>`;
 
@@ -1206,12 +1220,15 @@ function renderTodayCard(daysRunCount, lastWeight, hasWeights, delta) {
       </button>
 
       <div style="background:rgba(255,255,255,0.03);border-radius:14px;padding:14px;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-          ${badge(icon(delta <= 0 ? 'trendDown' : 'trendUp', 15), 'rgba(255,204,0,0.15)')}
-          ${cellLabel('Peso actual')}
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            ${badge(icon(delta <= 0 ? 'trendDown' : 'trendUp', 15), 'rgba(255,204,0,0.15)')}
+            ${cellLabel('Peso actual')}
+          </div>
+          ${weightDirection ? `<span title="Semáforo de tendencia" style="width:10px;height:10px;border-radius:50%;background:${weightColor};box-shadow:0 0 6px ${weightColor};flex-shrink:0;"></span>` : ''}
         </div>
         <div class="font-display" style="font-size:26px;">${hasWeights ? lastWeight : '—'}<span style="font-size:13px;color:rgba(255,255,255,.4);"> kg</span></div>
-        ${hasWeights ? `<div style="font-size:10.5px;color:${delta<=0?'#4ade80':'#f87171'};margin-top:2px;">${delta > 0 ? '+' : ''}${delta} kg</div>` : ''}
+        ${hasWeights ? `<div style="font-size:13px;font-weight:800;color:${delta<=0?'#4ade80':'#f87171'};margin-top:3px;">${delta > 0 ? '+' : ''}${delta} kg</div>` : ''}
       </div>
 
       <button data-shoe-edit="1" style="background:rgba(255,255,255,0.03);border-radius:14px;padding:14px;text-align:left;display:block;">
@@ -1223,7 +1240,7 @@ function renderTodayCard(daysRunCount, lastWeight, hasWeights, delta) {
           <span title="Semáforo de vida útil" style="width:10px;height:10px;border-radius:50%;background:${shoeColor};box-shadow:0 0 6px ${shoeColor};flex-shrink:0;"></span>
         </div>
         <div class="font-display" style="font-size:26px;">${shoeUsed.toFixed(0)}<span style="font-size:13px;color:rgba(255,255,255,.4);"> km</span></div>
-        <div style="font-size:10.5px;color:${shoeColor};margin-top:2px;">${shoeLabel}</div>
+        <div style="font-size:13px;font-weight:800;color:${shoeColor};margin-top:3px;">${shoeLabel}</div>
       </button>
 
     </div>
@@ -1621,6 +1638,16 @@ function computeEFData() {
     .map(a => ({ date: a.date, ef: +((a.avgSpeed * 60) / a.avgHr).toFixed(3) }));
 }
 
+function computeHRData() {
+  // Mismo filtro que el Factor EF (esfuerzos comparables), para que la FC
+  // que veas aquí sea la misma familia de datos, no una mezcla de esfuerzos.
+  return Object.values(S.activities)
+    .filter(a => a.date <= fmt(today) && a.avgHr && a.avgSpeed && a.movingTimeSec >= 900)
+    .filter(a => a.workoutType === 0 || a.workoutType === 2 || a.workoutType === undefined || a.workoutType === null)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(a => ({ date: a.date, hr: Math.round(a.avgHr) }));
+}
+
 function computeDistanceRatio() {
   // Ratio descriptivo de distancia: 7 días / media semanal de los 21 días previos.
   // No se presenta como una medida clínica de carga total.
@@ -1781,6 +1808,26 @@ function renderProgressSection() {
   }
   const efReliable = efData.length >= 4;
 
+  const hrData = computeHRData();
+  let hrTrend = null;
+  if (hrData.length >= 2) {
+    hrTrend = linearRegression(hrData.map((d, i) => ({ x: i, y: d.hr })));
+  }
+  const hrStart = hrData.length ? hrData[0].hr : null;
+  const hrCurrent = hrData.length ? hrData[hrData.length - 1].hr : null;
+  let hrChangePct = null;
+  if (hrTrend && hrData.length >= 4) {
+    const fittedFirst = hrTrend.intercept;
+    const fittedLast = hrTrend.intercept + hrTrend.slope * (hrData.length - 1);
+    hrChangePct = +(((fittedLast - fittedFirst) / fittedFirst) * 100).toFixed(1);
+  } else if (hrData.length >= 2 && hrStart) {
+    hrChangePct = +(((hrCurrent - hrStart) / hrStart) * 100).toFixed(1);
+  }
+  const hrReliable = hrData.length >= 4;
+  // En FC, bajar es la buena dirección (mismo esfuerzo, menos pulsaciones = más condición aeróbica).
+  const hrColor = hrChangePct === null ? '#c084fc' : hrChangePct < 0 ? '#4ade80' : hrChangePct > 0 ? '#facc15' : '#c084fc';
+
+
   const trStats = getTrainingStats();
 
   return `
@@ -1863,6 +1910,44 @@ function renderProgressSection() {
           <li>Prioriza pasos más cortos y rápidos en vez de zancada larga — eso reduce el impacto en cada paso (overstriding).</li>
           <li>No cambies tu forma de correr mientras tengas alguna molestia o lesión activa — espera a estar sin dolor.</li>
           <li>Revisa tu cadencia real en cada actividad sincronizada de Strava para ver si va subiendo con el tiempo.</li>
+        </ul>
+        ` : ''}
+      </div>` : ''}
+
+      ${hrData.length >= 1 ? `
+      <div class="dashed-rule"></div>
+      <div style="margin-top:12px;">
+        <div class="eyebrow" style="margin-bottom:4px;">Pulsaciones por minuto</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:10px;">FC promedio en trotes normales y carreras largas (mismo filtro que el Factor EF). Aquí bajar es la buena dirección: menos pulsaciones para el mismo esfuerzo es mejor condición aeróbica.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+          <div style="background:#151515;border-radius:12px;padding:10px;text-align:center;">
+            <div style="font-size:10px;color:rgba(255,255,255,0.5);">Empezaste con</div>
+            <div class="font-display" style="font-size:19px;color:#c084fc;margin-top:3px;">${hrStart}</div>
+          </div>
+          <div style="background:#151515;border-radius:12px;padding:10px;text-align:center;">
+            <div style="font-size:10px;color:rgba(255,255,255,0.5);">Ahora tienes</div>
+            <div class="font-display" style="font-size:19px;color:#c084fc;margin-top:3px;">${hrCurrent}</div>
+          </div>
+          <div style="background:#151515;border-radius:12px;padding:10px;text-align:center;">
+            <div style="font-size:10px;color:rgba(255,255,255,0.5);">Cambio</div>
+            <div class="font-display" style="font-size:19px;color:${hrColor};margin-top:3px;">${hrChangePct === null ? '—' : (hrChangePct > 0 ? '+' : '') + hrChangePct + '%'}</div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:10px;line-height:1.5;">
+          ${hrReliable ? `Calculado por regresión lineal sobre tus ${hrData.length} carreras que califican.` : hrData.length >= 2 ? `Con solo ${hrData.length} carreras que califican, es apenas el punto de partida — se vuelve un cálculo más confiable a partir de 4.` : `Necesitas al menos 2 carreras con FC registrada para ver un cambio.`}
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;">
+          <div style="font-size:11px;color:rgba(255,255,255,0.45);">Tips, recomendaciones y mejoras</div>
+          <button data-toggle-hr-tips="1" style="font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;flex-shrink:0;margin-left:8px;">${showHrTips ? 'Ocultar' : 'Mostrar'}</button>
+        </div>
+        ${showHrTips ? `
+        <ul style="margin:8px 0 0;padding-left:18px;font-size:12px;color:rgba(255,255,255,0.72);line-height:1.6;">
+          <li>Menos pulsaciones para el mismo ritmo = mejor condición aeróbica — pero más bajo no siempre es "mejor" en abstracto, depende de tu FC máxima real.</li>
+          <li>Calor, mala noche de sueño, cafeína, estrés y deshidratación suben tu FC sin que sea mala condición física.</li>
+          <li>Si ves tu FC subir de forma sostenida sin razón clara, puede ser señal de fatiga acumulada — vale la pena bajarle un poco.</li>
+          <li>Compara solo esfuerzos parecidos (por eso este número excluye intervalos y competencias).</li>
+          <li>Si usas reloj con sensor óptico de muñeca (no banda de pecho), ten en cuenta que puede tener margen de error, sobre todo a esfuerzo alto.</li>
         </ul>
         ` : ''}
       </div>` : ''}
@@ -2689,6 +2774,9 @@ document.addEventListener('click', (e) => {
 
   const toggleCadenceTips = e.target.closest('[data-toggle-cadence-tips]');
   if (toggleCadenceTips) { showCadenceTips = !showCadenceTips; render(); return; }
+
+  const toggleHrTips = e.target.closest('[data-toggle-hr-tips]');
+  if (toggleHrTips) { showHrTips = !showHrTips; render(); return; }
 
   const chip = e.target.closest('[data-week]');
   if (chip) { S.selectedWeek = parseInt(chip.dataset.week, 10); render(); return; }
