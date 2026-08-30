@@ -1092,13 +1092,24 @@ function renderCoachCard() {
   </div>`;
 }
 
-function weekLongRunRealKm(week) {
+function weekLongRunReal(week) {
+  // La tirada larga es una sesión; si hay varias actividades el mismo domingo,
+  // tomamos la de mayor distancia y leemos su duración — así km y minutos
+  // siempre vienen de la MISMA actividad, nunca de dos sesiones distintas.
   const sameDay = Object.values(S.activities)
     .filter(a => ['Run','TrailRun'].includes(a.sportType))
     .filter(a => { const d = new Date(a.date + 'T00:00:00'); return fmt(d) === fmt(week.day3Date) && d <= today; });
-  // La tirada larga es una sesión; si hay varias actividades el mismo domingo,
-  // tomamos la más larga y no sumamos sesiones distintas como si fueran una sola.
-  return sameDay.reduce((max, a) => Math.max(max, Number(a.distanceKm) || 0), 0);
+  if (!sameDay.length) return { km: 0, minutes: 0 };
+  const best = sameDay.reduce((max, a) => (Number(a.distanceKm) || 0) > (Number(max.distanceKm) || 0) ? a : max, sameDay[0]);
+  return { km: Number(best.distanceKm) || 0, minutes: (Number(best.movingTimeSec) || 0) / 60 };
+}
+
+function weekLongRunRealKm(week) {
+  return weekLongRunReal(week).km;
+}
+
+function evolutionBarRow(weekNum, label, pct, subtext) {
+  return `<div style="margin-top:9px;"><div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(255,255,255,.6);"><span>Sem ${weekNum}</span><span>${label}</span></div><div style="height:6px;background:rgba(255,255,255,.08);border-radius:99px;overflow:hidden;margin-top:4px;"><div style="height:100%;width:${pct}%;background:#FFCC00;"></div></div><div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:3px;">${subtext}</div></div>`;
 }
 
 function renderWeeklyEvolutionCard() {
@@ -1106,19 +1117,25 @@ function renderWeeklyEvolutionCard() {
   const idx=currentWeekIndex();
   for(let i=Math.max(0,idx-3);i<=Math.min(PLAN.length-1,idx);i++) {
     const w=PLAN[i], weeklyKm=weekRealKm(w), target=w.longRunTarget;
-    const longKm=weekLongRunRealKm(w);
-    if(target.unit === 'km') {
+    const real = weekLongRunReal(w);
+    const due = today >= w.day3Date;
+    const weeklyKmText = `${weeklyKm.toFixed(1)} km totales en la semana`;
+
+    if (target.unit === 'km') {
       const targetText = target.min === target.max ? `${target.min} km` : target.label;
-      const due = today >= w.day3Date;
-      const pct = due && target.min > 0 ? Math.min(100, (longKm / target.min) * 100) : 0;
-      const longLabel = due ? `${longKm.toFixed(1)} / ${targetText} · tirada larga` : `Pendiente · ${targetText} · tirada larga`;
-      rows.push(`<div style="margin-top:9px;"><div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(255,255,255,.6);"><span>Sem ${w.week}</span><span>${longLabel}</span></div><div style="height:6px;background:rgba(255,255,255,.08);border-radius:99px;overflow:hidden;margin-top:4px;"><div style="height:100%;width:${pct}%;background:#FFCC00;"></div></div><div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:3px;">${weeklyKm.toFixed(1)} km totales en la semana</div></div>`);
+      const pct = due && target.min > 0 ? Math.min(100, (real.km / target.min) * 100) : 0;
+      const longLabel = due ? `${real.km.toFixed(1)} / ${targetText} · tirada larga` : `Pendiente · ${targetText} · tirada larga`;
+      rows.push(evolutionBarRow(w.week, longLabel, pct, weeklyKmText));
+    } else if (target.unit === 'min') {
+      const targetText = target.min === target.max ? `${target.min} min` : target.label;
+      const pct = due && target.min > 0 ? Math.min(100, (real.minutes / target.min) * 100) : 0;
+      const longLabel = due ? `${real.minutes.toFixed(0)} / ${targetText} · tirada larga` : `Pendiente · ${targetText} · tirada larga`;
+      rows.push(evolutionBarRow(w.week, longLabel, pct, weeklyKmText));
     } else {
-      const plannedText=escapeHtml(target.label);
-      rows.push(`<div style="margin-top:9px;"><div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(255,255,255,.6);"><span>Sem ${w.week}</span><span>${weeklyKm.toFixed(1)} km totales</span></div><div style="height:6px;background:rgba(255,255,255,.08);border-radius:99px;overflow:hidden;margin-top:4px;"><div style="height:100%;width:0%;background:#FFCC00;"></div></div><div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:3px;">Tirada larga planificada: ${plannedText} · no se compara con km</div></div>`);
+      rows.push(evolutionBarRow(w.week, `${weeklyKm.toFixed(1)} km totales`, 0, 'Sin objetivo definido para esta semana'));
     }
   }
-  return `<div class="backup-card"><div class="eyebrow">Evolución semanal</div><div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:3px;">Los km totales y los objetivos de la tirada larga se muestran por separado para no mezclar unidades.</div>${rows.join('')}</div>`;
+  return `<div class="backup-card"><div class="eyebrow">Evolución semanal</div><div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:3px;">La barra compara tu tirada larga real contra el objetivo de esa semana — en km si el plan la da en km, en minutos si el plan la da en minutos.</div>${rows.join('')}</div>`;
 }
 
 function openGoalSettingsModal() {
