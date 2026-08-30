@@ -80,16 +80,18 @@ main { flex: 1; overflow-y: auto; padding-bottom: 96px; }
   border-radius: 20px;
   background: linear-gradient(135deg, #FFCC00, #e6b800);
   color: #000;
-  padding: 22px 20px;
+  padding: 18px 20px;
   position: relative;
   overflow: hidden;
   margin-top: 20px;
 }
-.hero .h-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.12em; opacity: 0.7; }
-.hero .h-num { font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 56px; line-height: 1; margin-top: 4px; }
-.hero .h-sub { font-size: 14px; font-weight: 600; margin-top: 4px; }
-.hero .h-date { font-size: 12px; font-weight: 600; margin-top: 10px; opacity: 0.7; }
-.hero .runner-ghost { position: absolute; right: 4px; bottom: 4px; opacity: 0.9; width: 92px; height: auto; }
+.hero .h-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.7; }
+.hero .h-num { font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 34px; line-height: 1; margin-top: 4px; }
+.hero .h-sub { font-size: 12px; font-weight: 600; margin-top: 3px; }
+.hero .h-date { font-size: 11px; font-weight: 600; margin-top: 8px; opacity: 0.7; }
+.hero .h-split { display: flex; align-items: stretch; gap: 14px; }
+.hero .h-col { flex: 1; min-width: 0; }
+.hero .h-divider { width: 1px; background: rgba(0,0,0,0.15); }
 
 /* Energy progress bar */
 .energy-track { position: relative; height: 16px; width: 100%; border-radius: 999px; background: #111; border: 1px solid rgba(255,255,255,0.08); overflow: hidden; }
@@ -275,7 +277,6 @@ const ICONS = {
   copy: '<svg width="{s}" height="{s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
   paste: '<svg width="{s}" height="{s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 14l2 2 4-4"/></svg>',
   x: '<svg width="{s}" height="{s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
-  runnerGhost: '<svg viewBox="0 0 100 100" class="runner-ghost" fill="#000"><g transform="translate(50 53) rotate(-14) scale(-1,1)"><circle cx="7" cy="-24" r="7.2"/><path d="M -18,28 L -2,6 L -8,-10 L 8,-6 L 16,8 L 26,2 L 29,10 L 13,19 L 17,28 L 26,39 L 19,43 L 4,28 L -4,12 L -13,33 Z"/></g></svg>',
   personSmall: '<svg width="{s}" height="{s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="4" r="2"/><path d="m15 20-3-6-3 6M9 10l2-4 2 4M6 8l3 2 3-2 3 2 3-2"/></svg>',
   cloud: '<svg width="{s}" height="{s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z"/></svg>',
   upload: '<svg width="{s}" height="{s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',
@@ -380,7 +381,6 @@ const DOW_ES = ["L","M","X","J","V","S","D"];
 --------------------------------------------------------------- */
 const today = (() => { const t = new Date(); t.setHours(0,0,0,0); return t; })();
 const APP_ICON_SRC = document.querySelector('.badge img').getAttribute('src');
-const RUNNER_SILHOUETTE_SRC = "data:image/png;base64,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";
 
 let S = {
   tab: 'home',
@@ -804,7 +804,8 @@ function currentWeekIndex() {
 }
 
 let toastTimer = null;
-let progressDetailOpen = false;
+let showProjectionText = false;
+let showTipsText = false;
 function showToast(msg) {
   const root = document.getElementById('toastRoot');
   root.innerHTML = `<div class="toast">${msg}</div>`;
@@ -1055,18 +1056,13 @@ function renderCoachCard() {
   const projectionLabel = projection ? secToHMS(projection) : '—';
   const gap = projection ? Math.round(projection-targetSec) : null;
   const gapLabel = gap === null ? '' : gap <= 0 ? 'Por debajo del objetivo estimado' : `+${secToHMS(gap)} sobre el objetivo`;
-  const scoreTone = c.score === null ? 'rgba(255,255,255,.45)' : c.score >= 75 ? '#4ade80' : c.score >= 55 ? '#facc15' : '#f87171';
-  const scoreLabel = c.score === null ? 'Datos insuficientes' : c.score>=75?'Índice favorable':c.score>=55?'En progreso':'Necesita atención';
   return `<div class="backup-card" style="border-color:rgba(255,204,0,.28);">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
       <div><div class="eyebrow" style="margin-bottom:3px;">Coach Runner</div><div style="font-size:12px;color:rgba(255,255,255,.55);">Análisis automático de tus datos</div></div>
       <button data-goal-settings="1" style="font-size:11px;color:rgba(255,255,255,.45);text-decoration:underline;">Objetivos</button>
     </div>
-    <div style="display:flex;align-items:center;gap:14px;margin-top:14px;">
-      <div style="width:70px;height:70px;border-radius:50%;border:6px solid ${scoreTone};display:flex;align-items:center;justify-content:center;flex:none;"><span class="font-display" style="font-size:24px;color:${scoreTone};">${c.score ?? '—'}</span></div>
-      <div><div style="font-size:15px;font-weight:800;color:${scoreTone};">${scoreLabel}</div><div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:3px;">Distancia: ${c.load.status}</div></div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px;">
+    <div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:10px;">Distancia: ${c.load.status}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;">
       <div class="stat-card"><div class="val font-display">${c.weekKm} km</div><div class="lbl">Esta semana</div></div>
       <div class="stat-card"><div class="val font-display">${c.load.acwr ?? '—'}</div><div class="lbl">7d / media previa 21d</div></div>
       <div class="stat-card"><div class="val font-display">${projectionLabel}</div><div class="lbl">Proyección maratón</div></div>
@@ -1074,7 +1070,7 @@ function renderCoachCard() {
     </div>
     ${gapLabel ? `<div style="font-size:11px;color:${gap<=0?'#4ade80':'#facc15'};margin-top:9px;">${gapLabel}</div>` : ''}
     <div style="margin-top:12px;">${c.recommendations.map((r,i)=>`<div style="font-size:12px;color:rgba(255,255,255,.72);line-height:1.5;margin-top:${i?'7px':'0'};">• ${escapeHtml(r)}</div>`).join('')}</div>
-    <button data-goto-plan-detail="1" style="margin-top:12px;font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;">Ver análisis completo →</button>
+    <button data-goto-plan="1" style="margin-top:12px;font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;">Ver análisis completo →</button>
   </div>`;
 }
 
@@ -1160,15 +1156,33 @@ function getTodayPlannedSession() {
   return hit ? { week:w, dayIdx:hit[0], date:hit[1], text:hit[2], key:`${w.week}-${hit[0]}` } : null;
 }
 
-function renderTodayCard() {
+function renderTodayCard(daysRunCount, lastWeight, hasWeights, delta) {
   const planned = getTodayPlannedSession();
   const todayRuns = Object.values(S.activities).filter(a => ['Run','TrailRun'].includes(a.sportType) && a.date === fmt(today)).sort((a,b)=>String(a.startLocal).localeCompare(String(b.startLocal)));
-  if (!planned && !todayRuns.length) return '';
   const done = planned ? !!S.sessionsDone[planned.key] : false;
+  const hasTodayContent = planned || todayRuns.length;
   return `<div class="backup-card" style="border-color:rgba(255,204,0,.32);">
-    <div class="eyebrow">Hoy</div>
-    ${planned ? `<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-top:6px;"><div><div style="font-size:15px;font-weight:800;">${escapeHtml(planned.text)}</div><div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:4px;">Semana ${planned.week.week} · ${planned.week.phase}</div></div><span style="font-size:10px;padding:4px 7px;border-radius:999px;background:${done?'rgba(74,222,128,.12)':'rgba(255,204,0,.12)'};color:${done?'#4ade80':'#FFCC00'};">${done?'COMPLETADO':'PLAN'}</span></div>` : ''}
-    ${todayRuns.length ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,.08);">${todayRuns.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;"><div><div style="font-size:12px;font-weight:700;">${escapeHtml(a.name)}</div><div style="font-size:10px;color:rgba(255,255,255,.45);">${a.distanceKm} km · ${a.paceStr}${a.avgHr?` · ${Math.round(a.avgHr)} ppm`:''}</div></div><span style="font-size:10px;color:#4ade80;">✓</span></div>`).join('')}</div>` : ''}
+    <div style="display:flex;gap:14px;">
+      <div style="flex:1.3;min-width:0;">
+        <div class="eyebrow">Hoy</div>
+        ${planned ? `<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-top:6px;"><div><div style="font-size:13px;font-weight:800;">${escapeHtml(planned.text)}</div><div style="font-size:10px;color:rgba(255,255,255,.45);margin-top:4px;">Sem ${planned.week.week} · ${planned.week.phase}</div></div><span style="font-size:9px;padding:3px 6px;border-radius:999px;background:${done?'rgba(74,222,128,.12)':'rgba(255,204,0,.12)'};color:${done?'#4ade80':'#FFCC00'};flex-shrink:0;">${done?'HECHO':'PLAN'}</span></div>` : ''}
+        ${todayRuns.length ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed rgba(255,255,255,.08);">${todayRuns.map(a=>`<div style="margin-top:4px;"><div style="font-size:11px;font-weight:700;">${escapeHtml(a.name)}</div><div style="font-size:10px;color:rgba(255,255,255,.45);">${a.distanceKm} km · ${a.paceStr}</div></div>`).join('')}</div>` : ''}
+        ${!hasTodayContent ? `<div style="font-size:11px;color:rgba(255,255,255,.4);margin-top:8px;">Sin sesión planeada hoy</div>` : ''}
+      </div>
+      <div style="width:1px;align-self:stretch;background:rgba(255,255,255,0.08);flex-shrink:0;"></div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:12px;min-width:0;">
+        <button data-tab="calendar" style="text-align:left;display:block;">
+          <div style="color:#FFCC00;">${icon('flame',14)}</div>
+          <div class="font-display" style="font-size:17px;margin-top:2px;">${daysRunCount}</div>
+          <div style="font-size:9px;color:rgba(255,255,255,.5);">Días corridos</div>
+        </button>
+        <div>
+          <div style="color:#FFCC00;">${icon(delta <= 0 ? 'trendDown' : 'trendUp', 14)}</div>
+          <div class="font-display" style="font-size:17px;margin-top:2px;">${hasWeights ? lastWeight + ' kg' : '—'}</div>
+          <div style="font-size:9px;color:rgba(255,255,255,.5);">Peso actual${hasWeights ? ` · ${delta > 0 ? '+' : ''}${delta} kg` : ''}</div>
+        </div>
+      </div>
+    </div>
   </div>`;
 }
 
@@ -1193,40 +1207,26 @@ function renderHome() {
   return `
     <div class="px5">
       <div class="hero">
-        <div class="h-label">Cuenta regresiva</div>
-        <div class="h-num font-display">${daysToRace}</div>
-        <div class="h-sub">días para el maratón</div>
-        <div class="h-date">Maratón · ${fmtShort(RACE_DATE)} ${RACE_DATE.getFullYear()}</div>
-        <img src="${RUNNER_SILHOUETTE_SRC}" class="runner-ghost" alt="">
-      </div>
-
-      ${renderTodayCard()}
-
-      <div class="section">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <div class="eyebrow" style="margin-bottom:0;">Progreso del plan</div>
-          <span style="font-size:12px;color:rgba(255,255,255,0.6);font-weight:500;">${sessionsCompletedCount}/${TOTAL_SESSIONS} entrenamientos</span>
-        </div>
-        <div class="energy-track">
-          <div class="energy-fill" style="width:${Math.max(progressPct,3)}%"></div>
-          ${progressPct > 0 ? `<span class="bolt-tip" style="left:calc(${Math.max(progressPct,3)}% - 8px)">${icon('zap',14,'#fff')}</span>` : ''}
-        </div>
-        <div style="text-align:right;font-size:11px;color:#FFCC00;font-weight:600;margin-top:4px;">${progressPct}% completado</div>
-      </div>
-
-      <div class="stat-grid">
-        <button class="stat-card" data-tab="calendar">
-          <div style="color:#FFCC00;margin-bottom:6px;">${icon('flame',15)}</div>
-          <div class="val font-display">${daysRunCount}</div>
-          <div class="lbl">Días corridos</div>
-        </button>
-        <div class="stat-card">
-          <div style="color:#FFCC00;margin-bottom:6px;">${icon(delta <= 0 ? 'trendDown' : 'trendUp', 15)}</div>
-          <div class="val font-display">${hasWeights ? lastWeight + ' kg' : '— kg'}</div>
-          <div class="lbl">Peso actual</div>
-          <div class="sub ${delta <= 0 ? 'sub-good' : 'sub-bad'}">${hasWeights ? (delta > 0 ? '+' : '') + delta + ' kg' : 'Sin registros'}</div>
+        <div class="h-split">
+          <div class="h-col">
+            <div class="h-label">Cuenta regresiva</div>
+            <div class="h-num font-display">${daysToRace}</div>
+            <div class="h-sub">días para el maratón</div>
+            <div class="h-date">${fmtShort(RACE_DATE)} ${RACE_DATE.getFullYear()}</div>
+          </div>
+          <div class="h-divider"></div>
+          <div class="h-col">
+            <div class="h-label">Progreso del plan</div>
+            <div class="h-num font-display">${progressPct}%</div>
+            <div class="h-sub">${sessionsCompletedCount}/${TOTAL_SESSIONS} entrenamientos</div>
+            <div style="width:100%;height:6px;background:rgba(0,0,0,0.15);border-radius:99px;overflow:hidden;margin-top:8px;">
+              <div style="width:${Math.max(progressPct,3)}%;height:100%;background:#000;"></div>
+            </div>
+          </div>
         </div>
       </div>
+
+      ${renderTodayCard(daysRunCount, lastWeight, hasWeights, delta)}
 
       <button class="week-card" data-goto-plan="1">
         <div class="row">
@@ -1762,7 +1762,7 @@ function renderProgressSection() {
   let cadenceTrend = null;
   if (cadenceData.length >= 2) {
     cadenceTrend = linearRegression(cadenceData.map((d, i) => ({ x: i, y: d.cadence })));
-    if (progressDetailOpen) setTimeout(() => drawCadenceChart(cadenceData, cadenceTrend), 0);
+    setTimeout(() => drawCadenceChart(cadenceData, cadenceTrend), 0);
   }
   let cadenceTrendNote = '';
   if (cadenceTrend && cadenceData.length >= 4) {
@@ -1776,7 +1776,7 @@ function renderProgressSection() {
   let efTrend = null;
   if (efData.length >= 2) {
     efTrend = linearRegression(efData.map((d, i) => ({ x: i, y: d.ef })));
-    if (progressDetailOpen) setTimeout(() => drawEFChart(efData, efTrend), 0);
+    setTimeout(() => drawEFChart(efData, efTrend), 0);
   }
   let efDeltaNote = '';
   if (efTrend && efData.length >= 4) {
@@ -1790,30 +1790,25 @@ function renderProgressSection() {
 
   const trStats = getTrainingStats();
 
-  const summaryBits = [];
-  if (st.compliancePct !== null) summaryBits.push(`Cumplimiento ${st.compliancePct}%`);
-  if (acwrNote) summaryBits.push(`Carga ${acwr.acwr}`);
-  if (efData.length >= 4) summaryBits.push(`EF ${efDeltaNote.includes('+') ? '↑' : efDeltaNote.includes('-') ? '↓' : '→'} tendencia`);
-  const summaryLine = summaryBits.length ? summaryBits.join(' · ') : 'Aún acumulando datos suficientes para un resumen.';
-
   return `
     <div class="card" style="margin-top:20px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div class="eyebrow" style="margin-bottom:0;">Tu progreso real</div>
-        <button data-toggle-progress-detail="1" style="font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;flex-shrink:0;margin-left:8px;">${progressDetailOpen ? 'Ocultar detalle' : 'Ver detalle completo'}</button>
-      </div>
-      <div style="font-size:12px;color:rgba(255,255,255,0.55);margin-top:6px;">${summaryLine}</div>
+      <div class="eyebrow">Tu progreso real</div>
 
-      ${!progressDetailOpen ? '' : `
-      <div class="dashed-rule" style="margin-top:12px;"></div>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0 6px;">
+        <div style="background:#151515;border-radius:12px;padding:10px;">
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Cumplimiento</div>
+          <div class="font-display" style="font-size:20px;color:#FFCC00;">${st.compliancePct !== null ? st.compliancePct + '%' : '—'}</div>
+        </div>
         <div style="background:#151515;border-radius:12px;padding:10px;">
           <div style="font-size:11px;color:rgba(255,255,255,0.5);">Total corrido</div>
           <div class="font-display" style="font-size:20px;color:#FFCC00;">${st.totalKm} km</div>
         </div>
         <div style="background:#151515;border-radius:12px;padding:10px;">
-          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Actividades de carrera</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Constancia (4 sem.)</div>
+          <div class="font-display" style="font-size:20px;color:#FFCC00;">${trStats.consistency}%</div>
+        </div>
+        <div style="background:#151515;border-radius:12px;padding:10px;">
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Actividades</div>
           <div class="font-display" style="font-size:20px;color:#FFCC00;">${st.totalRuns}</div>
         </div>
         <div style="background:#151515;border-radius:12px;padding:10px;">
@@ -1821,29 +1816,30 @@ function renderProgressSection() {
           <div class="font-display" style="font-size:20px;color:#FFCC00;">${paceStr}</div>
         </div>
         <div style="background:#151515;border-radius:12px;padding:10px;">
-          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Distancia máxima registrada</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Distancia máxima</div>
           <div class="font-display" style="font-size:20px;color:#FFCC00;">${st.longest ? st.longest.distanceKm : '—'} km</div>
         </div>
-      </div>
-
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.08em;margin-top:4px;">Últimos 7 días</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:8px 0 12px;">
         <div style="background:#151515;border-radius:12px;padding:10px;">
-          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Constancia (4 sem.)</div>
-          <div class="font-display" style="font-size:18px;color:#FFCC00;">${trStats.consistency}%</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Carga (ACWR)</div>
+          <div class="font-display" style="font-size:20px;color:${acwrNote ? acwrNote.color : '#FFCC00'};">${acwr ? acwr.acwr : '—'}</div>
         </div>
         <div style="background:#151515;border-radius:12px;padding:10px;">
-          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Carrera más larga</div>
-          <div class="font-display" style="font-size:18px;color:#FFCC00;">${trStats.longest7} km</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Más larga (7 días)</div>
+          <div class="font-display" style="font-size:20px;color:#FFCC00;">${trStats.longest7} km</div>
         </div>
       </div>
 
       <div class="dashed-rule"></div>
 
       <div style="margin-top:12px;">
-        <div class="eyebrow" style="margin-bottom:8px;">Proyección al maratón</div>
-        <div style="font-size:13px;color:rgba(255,255,255,0.75);line-height:1.5;margin-bottom:8px;">${raceProjectionNote}</div>
-        ${peakProjection ? `<div style="font-size:13px;color:rgba(255,255,255,0.75);line-height:1.5;">${peakProjection}</div>` : ''}
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div class="eyebrow" style="margin-bottom:0;">Proyección al maratón</div>
+          <button data-toggle-projection-text="1" style="font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;flex-shrink:0;margin-left:8px;">${showProjectionText ? 'Ocultar' : 'Mostrar'}</button>
+        </div>
+        ${showProjectionText ? `
+        <div style="font-size:13px;color:rgba(255,255,255,0.75);line-height:1.5;margin-top:8px;">${raceProjectionNote}</div>
+        ${peakProjection ? `<div style="font-size:13px;color:rgba(255,255,255,0.75);line-height:1.5;margin-top:8px;">${peakProjection}</div>` : ''}
+        ` : ''}
       </div>
 
       ${renderWeeklyEvolutionCard()}
@@ -1885,16 +1881,20 @@ function renderProgressSection() {
       <div class="dashed-rule"></div>
 
       <div style="margin-top:12px;">
-        <div class="eyebrow" style="margin-bottom:8px;">Tips y recomendaciones</div>
-        <ul style="margin:0;padding-left:18px;font-size:13px;color:rgba(255,255,255,0.75);line-height:1.6;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div class="eyebrow" style="margin-bottom:0;">Tips y recomendaciones</div>
+          <button data-toggle-tips-text="1" style="font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;flex-shrink:0;margin-left:8px;">${showTipsText ? 'Ocultar' : 'Mostrar'}</button>
+        </div>
+        ${showTipsText ? `
+        <ul style="margin:8px 0 0;padding-left:18px;font-size:13px;color:rgba(255,255,255,0.75);line-height:1.6;">
           <li style="color:${growthWarning ? '#f87171' : 'inherit'};">${growthNote}</li>
           ${acwrNote ? `<li style="color:${acwrNote.color};">${acwrNote.text}</li>` : ''}
           ${complianceNote ? `<li>${complianceNote}</li>` : ''}
           ${cadenceNote ? `<li>${cadenceNote}</li>` : ''}
           <li>Sigue combinando fuerza 2x/semana — protege articulaciones y sostiene el volumen que se viene.</li>
         </ul>
+        ` : ''}
       </div>
-      `}
     </div>
   `;
 }
@@ -2889,11 +2889,11 @@ document.addEventListener('click', (e) => {
   const gotoPlan = e.target.closest('[data-goto-plan]');
   if (gotoPlan) { S.tab = 'plan'; render(); return; }
 
-  const gotoPlanDetail = e.target.closest('[data-goto-plan-detail]');
-  if (gotoPlanDetail) { S.tab = 'plan'; progressDetailOpen = true; render(); return; }
+  const toggleProjectionText = e.target.closest('[data-toggle-projection-text]');
+  if (toggleProjectionText) { showProjectionText = !showProjectionText; render(); return; }
 
-  const toggleProgressDetail = e.target.closest('[data-toggle-progress-detail]');
-  if (toggleProgressDetail) { progressDetailOpen = !progressDetailOpen; render(); return; }
+  const toggleTipsText = e.target.closest('[data-toggle-tips-text]');
+  if (toggleTipsText) { showTipsText = !showTipsText; render(); return; }
 
   const chip = e.target.closest('[data-week]');
   if (chip) { S.selectedWeek = parseInt(chip.dataset.week, 10); render(); return; }
