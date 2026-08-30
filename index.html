@@ -424,6 +424,7 @@ let S = {
     marathonTargetSec: 15300, // 4:15:00; editable desde Coach Runner
   },
   races: [],               // { id, name, date, distanceKm, timeSec, notes }
+  madeUpSessions: {},      // { "semana-día": { date, weekAssigned, dayAssigned } } — sesiones repuestas
 };
 
 const hasClaudeStorage = typeof window.storage !== 'undefined' && window.storage !== null;
@@ -436,7 +437,7 @@ const STRAVA_CLIENT_ID = '273128';
 const STRAVA_CLIENT_SECRET = 'd6c812b645e4d0c62d0587c3cc2f4b0cdbd28c55';
 const STRAVA_REDIRECT_URI = 'https://martellscs-blip.github.io/Runner/';
 const STRAVA_SCOPE = 'activity:read_all,profile:read_all';
-const STRAVA_API_BASE = 'https://api-v3.strava.com/api/v3';
+const STRAVA_API_BASE = 'https://www.strava.com/api/v3';
 const STRAVA_OAUTH_BASE = 'https://www.strava.com/oauth';
 
 function makeOAuthState() {
@@ -556,18 +557,36 @@ function secToDuration(sec) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-// Busca una sesión del plan cuya fecha coincida exactamente con la actividad.
-// NO la marca automáticamente: el usuario debe confirmar la asociación.
-function findExactSessionForDate(dateObj) {
+// Marca automáticamente la sesión del plan que corresponde a esta carrera.
+// 1) Si coincide exacto con el día asignado (vie/sáb/dom), marca esa sesión.
+// 2) Si no coincide (carrera "extra"), rellena la sesión pendiente MÁS ANTIGUA
+//    desde el inicio del plan hasta la semana actual (nunca semanas futuras) —
+//    así corres de más y repones huecos viejos en orden, en vez de perderla.
+function autoMarkSession(dateObj) {
   const weekIdx = PLAN.findIndex(w => dateObj >= w.start && dateObj <= w.end);
-  if (weekIdx < 0) return null;
+  if (weekIdx < 0) return;
   const week = PLAN[weekIdx];
   const dateStr = fmt(dateObj);
+
   const exactMap = [[1, week.day1Date], [2, week.day2Date], [3, week.day3Date]];
   for (const [dayIdx, d] of exactMap) {
-    if (fmt(d) === dateStr) return { key: `${week.week}-${dayIdx}`, week, dayIdx };
+    if (fmt(d) === dateStr) {
+      S.sessionsDone[`${week.week}-${dayIdx}`] = true;
+      return;
+    }
   }
-  return null;
+
+  for (let i = 0; i <= weekIdx; i++) {
+    const w = PLAN[i];
+    for (const dayIdx of [1, 2, 3]) {
+      const key = `${w.week}-${dayIdx}`;
+      if (!S.sessionsDone[key]) {
+        S.sessionsDone[key] = true;
+        S.madeUpSessions[key] = { date: dateStr, weekAssigned: w.week, dayAssigned: dayIdx };
+        return;
+      }
+    }
+  }
 }
 
 async function syncStravaActivities(silent) {
@@ -614,11 +633,9 @@ async function syncStravaActivities(silent) {
                   calories: act.calories || null, avgHr: act.average_heartrate || null, maxHr: act.max_heartrate || null,
                   avgCadence: act.average_cadence || null, workoutType: act.workout_type, avgSpeed: act.average_speed,
                   maxSpeed: act.max_speed, kudos: act.kudos_count, prCount: act.pr_count,
-                  matchedSessionKey: findExactSessionForDate(startLocal)?.key || null,
                 };
-                const match = findExactSessionForDate(startLocal);
-                if (match && !S.sessionsDone[match.key]) S.activities[act.id].pendingSessionKey = match.key;
                 if (!S.runDays.includes(dateStr)) S.runDays.push(dateStr);
+                autoMarkSession(startLocal);
                 if (isNewActivity) newCount++;
               }
               break;
@@ -661,11 +678,9 @@ async function syncStravaActivities(silent) {
           maxSpeed: act.max_speed,
           kudos: act.kudos_count,
           prCount: act.pr_count,
-          matchedSessionKey: findExactSessionForDate(startLocal)?.key || null,
         };
         if (!S.runDays.includes(dateStr)) S.runDays.push(dateStr);
-        const match = findExactSessionForDate(startLocal);
-        if (match && !S.sessionsDone[match.key]) S.activities[act.id].pendingSessionKey = match.key;
+        autoMarkSession(startLocal);
         if (isNewActivity) newCount++;
       }
 
@@ -748,6 +763,7 @@ async function loadState() {
     if (parsed.weightSettings) S.weightSettings = { ...S.weightSettings, ...parsed.weightSettings };
     if (parsed.goals) S.goals = { ...S.goals, ...parsed.goals };
     if (Array.isArray(parsed.races)) S.races = parsed.races;
+    if (parsed.madeUpSessions && typeof parsed.madeUpSessions === 'object') S.madeUpSessions = parsed.madeUpSessions;
   }
 }
 
@@ -757,6 +773,7 @@ async function persist() {
     activities: S.activities, strava: S.strava,
     googleDrive: S.googleDrive, github: S.github, shoes: S.shoes,
     weightSettings: S.weightSettings, goals: S.goals, races: S.races,
+    madeUpSessions: S.madeUpSessions,
   });
 
   let savedOk = false;
@@ -853,9 +870,8 @@ function renderRecentActivities() {
         ${a.elevationGain ? `<span>⛰ ${Math.round(a.elevationGain)} m</span>` : ''}
         ${a.calories ? `<span>🔥 ${Math.round(a.calories)} kcal</span>` : ''}
         ${a.avgHr ? `<span>❤ ${Math.round(a.avgHr)} ppm</span>` : ''}
-        ${a.avgCadence ? `<span>👟 ${Math.round(a.avgCadence)} spm</span>` : ''}
+        ${a.avgCadence ? `<span>👟 ${Math.round(a.avgCadence * 2)} spm</span>` : ''}
       </div>
-      ${a.pendingSessionKey && !S.sessionsDone[a.pendingSessionKey] ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,0.08);display:flex;justify-content:space-between;align-items:center;gap:8px;"><span style="font-size:11px;color:rgba(255,255,255,0.55);">Coincide con un entrenamiento del plan.</span><button class="mini-btn" data-associate-session="${escapeHtml(a.pendingSessionKey)}" data-associate-activity="${escapeHtml(String(a.id))}">Asociar ✓</button></div>` : ''}
     </div>
   `).join('');
   return `
@@ -976,9 +992,23 @@ function computePaceHrTrend() {
   if (!rows.length) return null;
   const recent = rows.slice(-6);
   const ef = recent.map(a => (a.avgSpeed * 60) / a.avgHr);
-  const first = ef[0], last = ef[ef.length-1];
-  const change = first > 0 ? ((last-first)/first)*100 : 0;
-  return { rows:recent, ef, change:+change.toFixed(1) };
+  // Con 4+ puntos usamos regresión lineal (usa todos los datos, un solo día raro
+  // no distorsiona el resultado) — la misma técnica que ya validamos en el EF de Plan.
+  // Con menos de 4, no hay base suficiente para hablar de tendencia real.
+  let change = 0, reliable = false;
+  if (ef.length >= 4) {
+    const trend = linearRegression(ef.map((v, i) => ({ x: i, y: v })));
+    if (trend) {
+      const fittedFirst = trend.intercept;
+      const fittedLast = trend.intercept + trend.slope * (ef.length - 1);
+      change = fittedFirst > 0 ? ((fittedLast - fittedFirst) / fittedFirst) * 100 : 0;
+      reliable = true;
+    }
+  } else if (ef.length >= 2) {
+    const first = ef[0], last = ef[ef.length - 1];
+    change = first > 0 ? ((last - first) / first) * 100 : 0;
+  }
+  return { rows: recent, ef, change: +change.toFixed(1), reliable };
 }
 
 function getCompletedExpectedSessionCount() {
@@ -1123,7 +1153,7 @@ function renderTodayCard() {
   return `<div class="backup-card" style="border-color:rgba(255,204,0,.32);">
     <div class="eyebrow">Hoy</div>
     ${planned ? `<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-top:6px;"><div><div style="font-size:15px;font-weight:800;">${escapeHtml(planned.text)}</div><div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:4px;">Semana ${planned.week.week} · ${planned.week.phase}</div></div><span style="font-size:10px;padding:4px 7px;border-radius:999px;background:${done?'rgba(74,222,128,.12)':'rgba(255,204,0,.12)'};color:${done?'#4ade80':'#FFCC00'};">${done?'COMPLETADO':'PLAN'}</span></div>` : ''}
-    ${todayRuns.length ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,.08);">${todayRuns.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;"><div><div style="font-size:12px;font-weight:700;">${escapeHtml(a.name)}</div><div style="font-size:10px;color:rgba(255,255,255,.45);">${a.distanceKm} km · ${a.paceStr}${a.avgHr?` · ${Math.round(a.avgHr)} ppm`:''}</div></div>${a.pendingSessionKey && !S.sessionsDone[a.pendingSessionKey] ? `<button class="mini-btn" data-associate-session="${escapeHtml(a.pendingSessionKey)}" data-associate-activity="${escapeHtml(String(a.id))}">Asociar</button>` : `<span style="font-size:10px;color:#4ade80;">✓</span>`}</div>`).join('')}</div>` : ''}
+    ${todayRuns.length ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,.08);">${todayRuns.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;"><div><div style="font-size:12px;font-weight:700;">${escapeHtml(a.name)}</div><div style="font-size:10px;color:rgba(255,255,255,.45);">${a.distanceKm} km · ${a.paceStr}${a.avgHr?` · ${Math.round(a.avgHr)} ppm`:''}</div></div><span style="font-size:10px;color:#4ade80;">✓</span></div>`).join('')}</div>` : ''}
   </div>`;
 }
 
@@ -1134,7 +1164,8 @@ function renderPaceHrCard() {
   const first=t.rows[0], last=t.rows[t.rows.length-1];
   const paceFirst=first.paceStr, paceLast=last.paceStr;
   const tone=t.change>2?'#4ade80':t.change<-2?'#facc15':'rgba(255,255,255,.65)';
-  return `<div class="backup-card" style="border-color:rgba(192,132,252,.22);"><div class="eyebrow" style="color:#c084fc;">Ritmo + frecuencia cardiaca</div><div style="font-size:11px;color:rgba(255,255,255,.48);margin-top:3px;">Comparación de tus últimos ${t.rows.length} rodajes con FC disponible.</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;"><div class="stat-card"><div class="val font-display">${paceFirst}</div><div class="lbl">Primer registro</div></div><div class="stat-card"><div class="val font-display">${paceLast}</div><div class="lbl">Más reciente</div></div><div class="stat-card"><div class="val font-display">${Math.round(first.avgHr)} ppm</div><div class="lbl">FC inicial</div></div><div class="stat-card"><div class="val font-display">${Math.round(last.avgHr)} ppm</div><div class="lbl">FC reciente</div></div></div><div style="font-size:11px;color:${tone};font-weight:700;margin-top:10px;">EF reciente: ${t.change>=0?'+':''}${t.change}%</div><div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:4px;line-height:1.45;">Una mejora de EF sugiere mejor relación entre velocidad y esfuerzo cardiaco, pero debe compararse en esfuerzos parecidos.</div></div>`;
+  const changeLabel = t.reliable ? `EF reciente (tendencia por regresión): ${t.change>=0?'+':''}${t.change}%` : `EF reciente: ${t.change>=0?'+':''}${t.change}% (dato entre solo 2 carreras, aún no es tendencia)`;
+  return `<div class="backup-card" style="border-color:rgba(192,132,252,.22);"><div class="eyebrow" style="color:#c084fc;">Ritmo + frecuencia cardiaca</div><div style="font-size:11px;color:rgba(255,255,255,.48);margin-top:3px;">Comparación de tus últimos ${t.rows.length} rodajes con FC disponible.</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;"><div class="stat-card"><div class="val font-display">${paceFirst}</div><div class="lbl">Primer registro</div></div><div class="stat-card"><div class="val font-display">${paceLast}</div><div class="lbl">Más reciente</div></div><div class="stat-card"><div class="val font-display">${Math.round(first.avgHr)} ppm</div><div class="lbl">FC inicial</div></div><div class="stat-card"><div class="val font-display">${Math.round(last.avgHr)} ppm</div><div class="lbl">FC reciente</div></div></div><div style="font-size:11px;color:${tone};font-weight:700;margin-top:10px;">${changeLabel}</div><div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:4px;line-height:1.45;">Una mejora de EF sugiere mejor relación entre velocidad y esfuerzo cardiaco, pero debe compararse en esfuerzos parecidos.</div></div>`;
 }
 
 function renderHome() {
@@ -1523,6 +1554,30 @@ function renderPRsBlock() {
   `;
 }
 
+function renderMadeUpBlock() {
+  const entries = Object.entries(S.madeUpSessions)
+    .filter(([key]) => S.sessionsDone[key]) // solo las que siguen marcadas (por si se desmarcó a mano)
+    .sort(([, a], [, b]) => a.date.localeCompare(b.date));
+  if (!entries.length) return '';
+
+  const dayLabelFor = (n) => n === 1 ? 'Día 1 · Fácil' : n === 2 ? 'Día 2 · Calidad' : 'Día 3 · Larga';
+  const rows = entries.map(([, m]) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+      <div style="font-size:12px;">Semana ${m.weekAssigned} · ${dayLabelFor(m.dayAssigned)}</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.5);">🔁 ${fmtShort(new Date(m.date + 'T00:00:00'))}</div>
+    </div>
+  `).join('');
+
+  return `
+    <div class="dashed-rule"></div>
+    <div style="margin-top:12px;">
+      <div class="eyebrow" style="margin-bottom:4px;">Días repuestos (${entries.length})</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:8px;">Sesiones de semanas atrasadas que completaste corriendo días extra en semanas posteriores.</div>
+      ${rows}
+    </div>
+  `;
+}
+
 function drawSmoothPath(ctx, pts) {
   // Curva suave tipo Catmull-Rom (la misma técnica de apps como Strava/Oura)
   // en vez de líneas rectas entre punto y punto.
@@ -1610,13 +1665,18 @@ function computeProgressStats() {
   const compliancePct = expectedCount ? Math.round((doneCount / expectedCount) * 100) : null;
 
   const withCadence = validDistanceRuns.filter(a => Number(a.avgCadence) > 0);
-  // Strava entrega average_cadence como cadencia de la actividad; no se duplica.
+  // Strava entrega average_cadence de una sola pierna: se multiplica x2 para pasos/min reales.
   const cadenceWeight = withCadence.reduce((s,a)=>s+(Number(a.movingTimeSec)||0),0);
   const avgCadenceSpm = withCadence.length && cadenceWeight > 0
-    ? Math.round(withCadence.reduce((s,a)=>s+Number(a.avgCadence)*(Number(a.movingTimeSec)||0),0)/cadenceWeight)
-    : withCadence.length ? Math.round(withCadence.reduce((s,a)=>s+Number(a.avgCadence),0)/withCadence.length) : null;
+    ? Math.round(withCadence.reduce((s,a)=>s+Number(a.avgCadence)*2*(Number(a.movingTimeSec)||0),0)/cadenceWeight)
+    : withCadence.length ? Math.round(withCadence.reduce((s,a)=>s+Number(a.avgCadence)*2,0)/withCadence.length) : null;
 
-  const referenceRace = getReferenceRace();
+  let referenceRace = getReferenceRace();
+  if (!referenceRace && longest && longest.distanceKm >= 5) {
+    // Sin carrera de competencia registrada: usamos tu entrenamiento más largo
+    // como aproximación (menos confiable que una carrera real, se marca así abajo).
+    referenceRace = { timeSec: longest.movingTimeSec, distanceKm: longest.distanceKm, date: longest.date, source: 'tu entrenamiento más largo (no es una carrera real)' };
+  }
   let projectedRaceSec = null;
   if (referenceRace && referenceRace.distanceKm > 0 && referenceRace.distanceKm < 42.195) {
     projectedRaceSec = referenceRace.timeSec * Math.pow(42.195 / referenceRace.distanceKm, 1.06);
@@ -1649,6 +1709,7 @@ function renderProgressSection() {
         <div class="eyebrow">Estadísticas y proyección</div>
         <div class="desc" style="color:rgba(255,255,255,0.6);font-size:13px;">Aún no hay carreras sincronizadas desde Strava. Conecta y corre para ver aquí tus estadísticas, tips y proyección al maratón.</div>
         ${renderPRsBlock()}
+        ${renderMadeUpBlock()}
       </div>
     `;
   }
@@ -1656,10 +1717,10 @@ function renderProgressSection() {
   const avgPaceRounded = Math.round(st.avgPaceSecPerKm);
   const paceStr = `${Math.floor(avgPaceRounded/60)}:${(avgPaceRounded%60).toString().padStart(2,'0')} /km`;
 
-  const growthWarning = false;
+  const growthWarning = st.avgGrowthPct !== null && st.avgGrowthPct > 10;
   const growthNote = st.avgGrowthPct === null ? 'Aún no hay suficientes semanas con datos para calcular tu ritmo de progresión.'
     : growthWarning
-      ? `El cambio medio entre semanas consecutivas con datos es de ~${st.avgGrowthPct}%. Es una descripción estadística, no un umbral médico.`
+      ? `El cambio medio entre semanas consecutivas con datos es de ~${st.avgGrowthPct}%, por encima del 10% recomendado para subir kilometraje sin forzar de más.`
       : `El cambio medio entre semanas consecutivas con datos es de ~${st.avgGrowthPct}%. Es una descripción estadística, no un umbral médico.`;
 
   const complianceNote = st.compliancePct === null ? ''
@@ -1684,14 +1745,18 @@ function renderProgressSection() {
     : '';
 
   const reference = st.referenceRace;
+  const riegelReliability = !reference ? ''
+    : reference.distanceKm >= 21 ? ' Al venir de una distancia de medio maratón o más, esta es la proyección más confiable que da Riegel.'
+    : reference.distanceKm >= 15 ? ' Ojo: viene de una distancia todavía bastante menor al maratón, así que tómala con reserva moderada — se vuelve más precisa conforme corras más largo.'
+    : ' Ojo: es una extrapolación muy amplia (de menos de 15 km a 42.195 km), la fórmula de Riegel pierde precisión en saltos así de grandes — tómala solo como referencia lejana, no como predicción real todavía.';
   const raceProjectionNote = st.projectedRaceSec && reference
-    ? `Usando tu referencia de ${reference.distanceKm.toFixed(2)} km en ${secToHMS(reference.timeSec)} (${reference.source}, ${fmtShort(new Date(reference.date + 'T00:00:00'))}), la fórmula de Riegel (1.06) estima <strong>${secToHMS(st.projectedRaceSec)}</strong> para 42.195 km. Es una extrapolación matemática, no una garantía de rendimiento.`
-    : `No hay una carrera de referencia válida para proyectar el maratón. Registra una carrera con distancia y tiempo, o sincroniza una actividad de Strava marcada como carrera.`;
+    ? `Usando tu referencia de ${reference.distanceKm.toFixed(2)} km en ${secToHMS(reference.timeSec)} (${reference.source}, ${fmtShort(new Date(reference.date + 'T00:00:00'))}), la fórmula de Riegel (1.06) estima <strong>${secToHMS(st.projectedRaceSec)}</strong> para 42.195 km. Es una extrapolación matemática, no una garantía de rendimiento.${riegelReliability}`
+    : `Necesitas al menos un entrenamiento de 5 km o más para calcular una proyección de tiempo de maratón.`;
 
   const cadenceData = Object.values(S.activities)
     .filter(a => a.avgCadence)
     .sort((a, b) => a.date.localeCompare(b.date))
-    .map(a => ({ date: a.date, cadence: Math.round(a.avgCadence) }));
+    .map(a => ({ date: a.date, cadence: Math.round(a.avgCadence * 2) }));
   let cadenceTrend = null;
   if (cadenceData.length >= 2) {
     cadenceTrend = linearRegression(cadenceData.map((d, i) => ({ x: i, y: d.cadence })));
@@ -1784,6 +1849,7 @@ function renderProgressSection() {
       </div>` : ''}
 
       ${renderPRsBlock()}
+      ${renderMadeUpBlock()}
 
       <div class="dashed-rule"></div>
 
@@ -2049,6 +2115,7 @@ function renderPlan() {
   const sessionCards = sessions.map(s => {
     const key = `${w.week}-${s.dayIndex}`;
     const done = !!S.sessionsDone[key];
+    const madeUp = S.madeUpSessions[key];
     const cls = done ? 'done' : '';
     return `
       <button class="session-card ${cls}" data-toggle-session="${key}">
@@ -2061,7 +2128,7 @@ function renderPlan() {
           ${done ? `<span class="session-bolt" style="display:flex;">${icon('zap',18,'#FFCC00')}</span>` : `<span class="check-circle"></span>`}
         </div>
         <div class="stext">${s.text}</div>
-        <div class="sfoot">${done ? '⚡ Entrenamiento completado' : 'Toca para marcar como corrido'}</div>
+        <div class="sfoot">${done && madeUp ? `🔁 Repuesta — corrida el ${fmtShort(new Date(madeUp.date + 'T00:00:00'))}` : done ? '⚡ Entrenamiento completado' : 'Toca para marcar como corrido'}</div>
       </button>
     `;
   }).join('');
@@ -2198,9 +2265,12 @@ function renderPeso() {
   const targetWeight = S.weightSettings.targetWeight;
   let weeklyTrend = null;
   if (chartData.length >= 3) {
-    const first = chartData[0], last = chartData[chartData.length - 1];
-    const days = Math.max(1, (new Date(last.date) - new Date(first.date)) / DAY_MS);
-    weeklyTrend = +(((last.weight - first.weight) / days) * 7).toFixed(2);
+    // Regresión lineal sobre TODOS los pesajes (no solo el primero y el último) —
+    // un solo día raro (retención de líquidos, comida pesada) no distorsiona el resultado.
+    const t0 = new Date(chartData[0].date).getTime();
+    const points = chartData.map(d => ({ x: (new Date(d.date).getTime() - t0) / DAY_MS, y: d.weight }));
+    const trend = linearRegression(points);
+    if (trend) weeklyTrend = +(trend.slope * 7).toFixed(2);
   }
 
   let weightProjection = null;
@@ -2385,7 +2455,7 @@ function backupPayloadObject() {
     exportedAt: new Date().toISOString(),
     runDays: S.runDays, weighIns: S.weighIns, sessionsDone: S.sessionsDone,
     activities: S.activities, shoes: S.shoes, weightSettings: S.weightSettings, goals: S.goals,
-    races: S.races,
+    races: S.races, madeUpSessions: S.madeUpSessions,
   };
 }
 
@@ -2400,6 +2470,7 @@ function applyRestoredData(parsed) {
   if (parsed.weightSettings && typeof parsed.weightSettings === 'object' && !Array.isArray(parsed.weightSettings)) S.weightSettings = { ...S.weightSettings, ...parsed.weightSettings };
   if (parsed.goals && typeof parsed.goals === 'object' && !Array.isArray(parsed.goals)) S.goals = { ...S.goals, ...parsed.goals };
   if (Array.isArray(parsed.races)) S.races = parsed.races;
+  if (parsed.madeUpSessions && typeof parsed.madeUpSessions === 'object' && !Array.isArray(parsed.madeUpSessions)) S.madeUpSessions = { ...parsed.madeUpSessions };
 }
 
 /* ---------------------------------------------------------------
@@ -2777,7 +2848,7 @@ document.addEventListener('click', (e) => {
   const sessionBtn = e.target.closest('[data-toggle-session]');
   if (sessionBtn) {
     const key = sessionBtn.dataset.toggleSession;
-    if (S.sessionsDone[key]) delete S.sessionsDone[key];
+    if (S.sessionsDone[key]) { delete S.sessionsDone[key]; delete S.madeUpSessions[key]; }
     else S.sessionsDone[key] = true;
     persist();
     render();
@@ -2833,13 +2904,6 @@ document.addEventListener('click', (e) => {
 
   const stravaConnectBtn = e.target.closest('[data-strava-connect]');
   if (stravaConnectBtn) { window.location.href = stravaAuthUrl(); return; }
-
-  const associateBtn = e.target.closest('[data-associate-session]');
-  if (associateBtn) {
-    const key = associateBtn.dataset.associateSession;
-    if (key) { S.sessionsDone[key] = true; const id=associateBtn.dataset.associateActivity; if (S.activities[id]) delete S.activities[id].pendingSessionKey; persist(); render(); showToast('Entrenamiento asociado al plan ✅'); }
-    return;
-  }
 
   const goalSettingsBtn = e.target.closest('[data-goal-settings]');
   if (goalSettingsBtn) { openGoalSettingsModal(); return; }
