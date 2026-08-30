@@ -550,10 +550,14 @@ async function syncStravaActivities(silent) {
 
     while (true) {
       const params = new URLSearchParams({ after: String(after), per_page: '100', page: String(page) });
-      const res = await fetch(`https://api-v3.strava.com/athlete/activities?${params.toString()}`, {
+      const res = await fetch(`https://www.strava.com/api/v3/athlete/activities?${params.toString()}`, {
         headers: { Authorization: `Bearer ${S.strava.accessToken}` },
       });
-      if (!res.ok) throw new Error('activities fetch failed');
+      if (!res.ok) {
+        let detail = '';
+        try { detail = await res.text(); } catch (_) {}
+        throw new Error(`activities fetch failed: ${res.status} ${detail}`);
+      }
       const list = await res.json();
       if (!list.length) break;
 
@@ -604,8 +608,14 @@ async function syncStravaActivities(silent) {
     await persist();
     if (newCount > 0 && !silent) showToast(`${newCount} actividad(es) sincronizada(s) ✅`);
   } catch (e) {
-    S.strava.error = 'No se pudo sincronizar con Strava';
-    if (!silent) showToast('No se pudo sincronizar con Strava');
+    console.error('Strava sync error:', e);
+    const status = String(e && e.message || '').match(/\b(401|403|429|500|502|503)\b/)?.[1];
+    S.strava.error = status === '401'
+      ? 'Strava rechazó el acceso. Reconecta la cuenta.'
+      : status === '429'
+        ? 'Strava alcanzó el límite de solicitudes. Intenta más tarde.'
+        : 'No se pudo sincronizar con Strava';
+    if (!silent) showToast(S.strava.error);
   } finally {
     S.strava.syncing = false;
     render();
