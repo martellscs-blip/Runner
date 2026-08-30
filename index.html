@@ -806,6 +806,7 @@ function currentWeekIndex() {
 let toastTimer = null;
 let showProjectionText = false;
 let showTipsText = false;
+let showCoachRecs = false;
 function showToast(msg) {
   const root = document.getElementById('toastRoot');
   root.innerHTML = `<div class="toast">${msg}</div>`;
@@ -1059,17 +1060,23 @@ function renderCoachCard() {
   return `<div class="backup-card" style="border-color:rgba(255,204,0,.28);">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
       <div><div class="eyebrow" style="margin-bottom:3px;">Coach Runner</div><div style="font-size:12px;color:rgba(255,255,255,.55);">Análisis automático de tus datos</div></div>
-      <button data-goal-settings="1" style="font-size:11px;color:rgba(255,255,255,.45);text-decoration:underline;">Objetivos</button>
+      <button data-goal-settings="1" style="font-size:11px;color:rgba(255,255,255,.45);text-decoration:underline;flex-shrink:0;">Objetivos</button>
     </div>
-    <div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:10px;">Distancia: ${c.load.status}</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">
       <div class="stat-card"><div class="val font-display">${c.weekKm} km</div><div class="lbl">Esta semana</div></div>
       <div class="stat-card"><div class="val font-display">${c.load.acwr ?? '—'}</div><div class="lbl">7d / media previa 21d</div></div>
       <div class="stat-card"><div class="val font-display">${projectionLabel}</div><div class="lbl">Proyección maratón</div></div>
       <div class="stat-card"><div class="val font-display">${targetLabel}</div><div class="lbl">Objetivo maratón</div></div>
     </div>
     ${gapLabel ? `<div style="font-size:11px;color:${gap<=0?'#4ade80':'#facc15'};margin-top:9px;">${gapLabel}</div>` : ''}
-    <div style="margin-top:12px;">${c.recommendations.map((r,i)=>`<div style="font-size:12px;color:rgba(255,255,255,.72);line-height:1.5;margin-top:${i?'7px':'0'};">• ${escapeHtml(r)}</div>`).join('')}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;">
+      <div style="font-size:11px;color:rgba(255,255,255,.45);">Distancia 7 días, tirada larga y eficiencia</div>
+      <button data-toggle-coach-recs="1" style="font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;flex-shrink:0;margin-left:8px;">${showCoachRecs ? 'Ocultar' : 'Mostrar'}</button>
+    </div>
+    ${showCoachRecs ? `
+    <div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:8px;">Distancia: ${c.load.status}</div>
+    <div style="margin-top:8px;">${c.recommendations.map((r,i)=>`<div style="font-size:12px;color:rgba(255,255,255,.72);line-height:1.5;margin-top:${i?'7px':'0'};">• ${escapeHtml(r)}</div>`).join('')}</div>
+    ` : ''}
     <button data-goto-plan="1" style="margin-top:12px;font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;">Ver análisis completo →</button>
   </div>`;
 }
@@ -1164,49 +1171,58 @@ function renderTodayCard(daysRunCount, lastWeight, hasWeights, delta) {
 
   const shoeUsed = shoeKmUsed();
   const shoeThreshold = S.shoes.thresholdKm || 550;
-  let shoeStatus = 'ok';
-  if (shoeUsed >= shoeThreshold) shoeStatus = 'danger';
-  else if (shoeUsed >= shoeThreshold * 0.85) shoeStatus = 'warn';
+  let shoeStatus = 'ok', shoeLabel = 'Buen estado';
+  if (shoeUsed >= shoeThreshold) { shoeStatus = 'danger'; shoeLabel = 'Hora de cambiarlos'; }
+  else if (shoeUsed >= shoeThreshold * 0.85) { shoeStatus = 'warn'; shoeLabel = 'Cerca del límite'; }
   const shoeColor = shoeStatus === 'danger' ? '#f87171' : shoeStatus === 'warn' ? '#facc15' : '#4ade80';
 
-  const colStyle = 'flex:1;min-width:0;padding:0 6px;text-align:left;display:block;';
-  const divider = '<div style="width:1px;align-self:stretch;background:rgba(255,255,255,0.08);flex-shrink:0;"></div>';
+  const badge = (iconHtml, bg) => `<div style="width:30px;height:30px;border-radius:50%;background:${bg};display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#FFCC00;">${iconHtml}</div>`;
+  const cellLabel = (text) => `<span style="font-size:9.5px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.06em;">${text}</span>`;
 
-  return `<div class="backup-card" style="border-color:rgba(255,204,0,.32);padding:14px 8px;">
-    <div style="display:flex;align-items:stretch;">
+  return `<div class="backup-card" style="border-color:rgba(255,204,0,.28);padding:18px 16px;">
+    <div class="eyebrow" style="margin-bottom:12px;">Resumen rápido</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
 
-      <div style="${colStyle}">
-        <div class="eyebrow" style="font-size:9px;margin-bottom:5px;">Hoy</div>
+      <div style="background:rgba(255,255,255,0.03);border-radius:14px;padding:14px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          ${badge(icon('zap',15), 'rgba(255,204,0,0.15)')}
+          ${cellLabel('Hoy')}
+        </div>
         ${planned ? `
-          <div style="font-size:10.5px;font-weight:800;line-height:1.3;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${escapeHtml(planned.text)}</div>
-          <span style="display:inline-block;margin-top:5px;font-size:8px;padding:2px 5px;border-radius:999px;background:${done?'rgba(74,222,128,.12)':'rgba(255,204,0,.12)'};color:${done?'#4ade80':'#FFCC00'};">${done?'HECHO':'PLAN'}</span>
+          <div style="font-size:12px;font-weight:800;line-height:1.35;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${escapeHtml(planned.text)}</div>
+          <span style="display:inline-block;margin-top:6px;font-size:9px;font-weight:700;padding:3px 7px;border-radius:999px;background:${done?'rgba(74,222,128,.15)':'rgba(255,204,0,.15)'};color:${done?'#4ade80':'#FFCC00'};">${done?'HECHO':'PLAN'}</span>
         ` : ''}
-        ${todayRuns.length ? `<div style="margin-top:6px;font-size:9px;color:rgba(255,255,255,.55);">${todayRuns.map(a=>`${a.distanceKm} km ✓`).join(' · ')}</div>` : ''}
-        ${!hasTodayContent ? `<div style="font-size:9.5px;color:rgba(255,255,255,.4);">Sin sesión hoy</div>` : ''}
+        ${todayRuns.length ? `<div style="margin-top:6px;font-size:10.5px;color:rgba(255,255,255,.55);">${todayRuns.map(a=>`${a.distanceKm} km ✓`).join(' · ')}</div>` : ''}
+        ${!hasTodayContent ? `<div style="font-size:11px;color:rgba(255,255,255,.4);">Sin sesión hoy</div>` : ''}
       </div>
 
-      ${divider}
-
-      <button data-tab="calendar" style="${colStyle}">
-        <div style="color:#FFCC00;">${icon('flame',13)}</div>
-        <div class="font-display" style="font-size:16px;margin-top:3px;">${daysRunCount}</div>
-        <div style="font-size:8px;color:rgba(255,255,255,.5);line-height:1.3;">Días corridos</div>
+      <button data-tab="calendar" style="background:rgba(255,255,255,0.03);border-radius:14px;padding:14px;text-align:left;display:block;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          ${badge(icon('flame',15), 'rgba(255,204,0,0.15)')}
+          ${cellLabel('Días corridos')}
+        </div>
+        <div class="font-display" style="font-size:26px;">${daysRunCount}</div>
       </button>
 
-      ${divider}
-
-      <div style="${colStyle}">
-        <div style="color:#FFCC00;">${icon(delta <= 0 ? 'trendDown' : 'trendUp', 13)}</div>
-        <div class="font-display" style="font-size:16px;margin-top:3px;">${hasWeights ? lastWeight : '—'}</div>
-        <div style="font-size:8px;color:rgba(255,255,255,.5);line-height:1.3;">Peso (kg)${hasWeights ? ` · ${delta > 0 ? '+' : ''}${delta}` : ''}</div>
+      <div style="background:rgba(255,255,255,0.03);border-radius:14px;padding:14px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          ${badge(icon(delta <= 0 ? 'trendDown' : 'trendUp', 15), 'rgba(255,204,0,0.15)')}
+          ${cellLabel('Peso actual')}
+        </div>
+        <div class="font-display" style="font-size:26px;">${hasWeights ? lastWeight : '—'}<span style="font-size:13px;color:rgba(255,255,255,.4);"> kg</span></div>
+        ${hasWeights ? `<div style="font-size:10.5px;color:${delta<=0?'#4ade80':'#f87171'};margin-top:2px;">${delta > 0 ? '+' : ''}${delta} kg</div>` : ''}
       </div>
 
-      ${divider}
-
-      <button data-shoe-edit="1" style="${colStyle}">
-        <div style="font-size:13px;line-height:1;">👟</div>
-        <div class="font-display" style="font-size:16px;margin-top:3px;color:${shoeColor};">${shoeUsed.toFixed(0)}</div>
-        <div style="font-size:8px;color:rgba(255,255,255,.5);line-height:1.3;">Tenis (km)</div>
+      <button data-shoe-edit="1" style="background:rgba(255,255,255,0.03);border-radius:14px;padding:14px;text-align:left;display:block;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center;font-size:14px;">👟</div>
+            ${cellLabel('Tenis')}
+          </div>
+          <span title="Semáforo de vida útil" style="width:10px;height:10px;border-radius:50%;background:${shoeColor};box-shadow:0 0 6px ${shoeColor};flex-shrink:0;"></span>
+        </div>
+        <div class="font-display" style="font-size:26px;">${shoeUsed.toFixed(0)}<span style="font-size:13px;color:rgba(255,255,255,.4);"> km</span></div>
+        <div style="font-size:10.5px;color:${shoeColor};margin-top:2px;">${shoeLabel}</div>
       </button>
 
     </div>
@@ -2894,6 +2910,9 @@ document.addEventListener('click', (e) => {
 
   const toggleTipsText = e.target.closest('[data-toggle-tips-text]');
   if (toggleTipsText) { showTipsText = !showTipsText; render(); return; }
+
+  const toggleCoachRecs = e.target.closest('[data-toggle-coach-recs]');
+  if (toggleCoachRecs) { showCoachRecs = !showCoachRecs; render(); return; }
 
   const chip = e.target.closest('[data-week]');
   if (chip) { S.selectedWeek = parseInt(chip.dataset.week, 10); render(); return; }
