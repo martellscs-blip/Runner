@@ -292,7 +292,7 @@ const PLAN_START = new Date(2026, 6, 20);
 const RACE_DATE = new Date(2026, 11, 13);
 const DAY_MS = 86400000;
 const addDays = (d, n) => new Date(d.getTime() + n * DAY_MS);
-const fmt = (d) => d.toISOString().slice(0, 10);
+const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 const fmtShort = (d) => d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
 
 const WEEKS_RAW = [
@@ -318,13 +318,34 @@ const WEEKS_RAW = [
   { phase: "Tapering", day1: "30 min suave", day2: "30 min suave", day3: "12 km", badge: "12 km" },
   { phase: "Tapering · semana de carrera", day1: "20 min suave", day2: "20 min suave (4-5 min a ritmo de carrera)", day3: "6-8 km suave · ¡MARATÓN el domingo 13 dic!", badge: "RACE" },
 ];
+function parsePlanTarget(text) {
+  const raw = String(text || '');
+  const rangeKm = raw.match(/(\d+(?:[.,]\d+)?)\s*[-–]\s*(\d+(?:[.,]\d+)?)\s*km\b/i);
+  if (rangeKm) {
+    return { unit: 'km', min: Number(rangeKm[1].replace(',', '.')), max: Number(rangeKm[2].replace(',', '.')), label: `${rangeKm[1].replace(',', '.')}–${rangeKm[2].replace(',', '.')} km` };
+  }
+  const km = raw.match(/(\d+(?:[.,]\d+)?)\s*km\b/i);
+  if (km) {
+    const value = Number(km[1].replace(',', '.'));
+    return { unit: 'km', min: value, max: value, label: `${value} km` };
+  }
+  const minutes = raw.match(/(\d+(?:[.,]\d+)?)\s*min\b/i);
+  if (minutes) {
+    const value = Number(minutes[1].replace(',', '.'));
+    return { unit: 'min', min: value, max: value, label: `${value} min` };
+  }
+  return { unit: null, min: null, max: null, label: raw || '—' };
+}
+
 const PLAN = WEEKS_RAW.map((w, i) => {
   const start = addDays(PLAN_START, i * 7);
   const end = addDays(start, 6);
   const day1Date = addDays(start, 4); // viernes
   const day2Date = addDays(start, 5); // sábado
   const day3Date = addDays(start, 6); // domingo
-  return { ...w, week: i + 1, start, end, day1Date, day2Date, day3Date };
+  const sessionTargets = [parsePlanTarget(w.day1), parsePlanTarget(w.day2), parsePlanTarget(w.day3)];
+  const longRunTarget = sessionTargets[2];
+  return { ...w, week: i + 1, start, end, day1Date, day2Date, day3Date, sessionTargets, longRunTarget };
 });
 const TOTAL_SESSIONS = PLAN.length * 3;
 
@@ -779,8 +800,8 @@ function showToast(msg) {
 function weekRealKm(week) {
   return Object.values(S.activities)
     .filter(a => ['Run', 'TrailRun'].includes(a.sportType))
-    .filter(a => { const d = new Date(a.date + 'T00:00:00'); return d >= week.start && d <= week.end; })
-    .reduce((sum, a) => sum + a.distanceKm, 0);
+    .filter(a => { const d = new Date(a.date + 'T00:00:00'); return d >= week.start && d <= week.end && d <= today; })
+    .reduce((sum, a) => { const km=Number(a.distanceKm); return sum + (Number.isFinite(km) ? km : 0); }, 0);
 }
 
 function renderStravaCard() {
@@ -832,7 +853,7 @@ function renderRecentActivities() {
         ${a.elevationGain ? `<span>⛰ ${Math.round(a.elevationGain)} m</span>` : ''}
         ${a.calories ? `<span>🔥 ${Math.round(a.calories)} kcal</span>` : ''}
         ${a.avgHr ? `<span>❤ ${Math.round(a.avgHr)} ppm</span>` : ''}
-        ${a.avgCadence ? `<span>👟 ${Math.round(a.avgCadence * 2)} spm</span>` : ''}
+        ${a.avgCadence ? `<span>👟 ${Math.round(a.avgCadence)} spm</span>` : ''}
       </div>
       ${a.pendingSessionKey && !S.sessionsDone[a.pendingSessionKey] ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,0.08);display:flex;justify-content:space-between;align-items:center;gap:8px;"><span style="font-size:11px;color:rgba(255,255,255,0.55);">Coincide con un entrenamiento del plan.</span><button class="mini-btn" data-associate-session="${escapeHtml(a.pendingSessionKey)}" data-associate-activity="${escapeHtml(String(a.id))}">Asociar ✓</button></div>` : ''}
     </div>
@@ -899,39 +920,59 @@ function getWeekKmOffset(offset) {
   return weekRealKm(PLAN[idx]);
 }
 
-function getCurrentWeekTarget() {
+function getCurrentWeekLongRunTarget() {
   const w = PLAN[currentWeekIndex()];
-  return parseFloat(w.badge) || 0;
+  return w?.longRunTarget || { unit: null, min: null, max: null, label: '—' };
+}
+
+function getCurrentWeekTarget() {
+  const target = getCurrentWeekLongRunTarget();
+  return target.unit === 'km' ? target.min : 0;
 }
 
 function computeLoadAnalytics() {
   const runs = Object.values(S.activities).filter(a => ['Run','TrailRun'].includes(a.sportType));
-  const dayKm = {};
-  runs.forEach(a => { dayKm[a.date] = (dayKm[a.date] || 0) + (a.distanceKm || 0); });
   const acuteStart = addDays(today, -6);
   const chronicStart = addDays(today, -27);
-  const km7 = runs.filter(a => { const d=new Date(a.date+'T00:00:00'); return d>=acuteStart && d<=today; }).reduce((s,a)=>s+a.distanceKm,0);
-  const km28 = runs.filter(a => { const d=new Date(a.date+'T00:00:00'); return d>=chronicStart && d<=today; }).reduce((s,a)=>s+a.distanceKm,0);
-  const chronicAvg = km28 / 4;
-  const acwr = chronicAvg > 0 ? km7 / chronicAvg : null;
+  const prior21Start = addDays(today, -27);
+  const prior21End = addDays(today, -7);
+  const inRange = (a, start, end = today) => {
+    const d = new Date(a.date + 'T00:00:00');
+    return d >= start && d <= end;
+  };
+  const km7 = runs.filter(a => inRange(a, acuteStart)).reduce((s,a)=>s+(Number(a.distanceKm)||0),0);
+  const km28 = runs.filter(a => inRange(a, chronicStart)).reduce((s,a)=>s+(Number(a.distanceKm)||0),0);
+  const prior21Km = runs.filter(a => inRange(a, prior21Start, prior21End)).reduce((s,a)=>s+(Number(a.distanceKm)||0),0);
+  const chronicWeeklyAvg = prior21Km / 3;
+  const ratio = chronicWeeklyAvg > 0 ? km7 / chronicWeeklyAvg : null;
   const previous7Start = addDays(today, -13), previous7End = addDays(today, -7);
-  const prev7 = runs.filter(a => { const d=new Date(a.date+'T00:00:00'); return d>=previous7Start && d<=previous7End; }).reduce((s,a)=>s+a.distanceKm,0);
+  const prev7 = runs.filter(a => inRange(a, previous7Start, previous7End)).reduce((s,a)=>s+(Number(a.distanceKm)||0),0);
   const changePct = prev7 > 0 ? ((km7-prev7)/prev7)*100 : null;
   let status='Sin suficientes datos', tone='rgba(255,255,255,.5)';
-  if (acwr !== null) {
-    if (acwr >= 1.5) { status='Carga alta: reduce o mantén volumen'; tone='#f87171'; }
-    else if (acwr >= 1.3) { status='Carga elevada: vigila recuperación'; tone='#facc15'; }
-    else if (acwr < 0.6) { status='Carga baja: puedes progresar gradualmente'; tone='#facc15'; }
-    else { status='Carga estable'; tone='#4ade80'; }
+  if (ratio !== null) {
+    if (ratio >= 1.5) { status='Distancia reciente muy superior a la media previa'; tone='#f87171'; }
+    else if (ratio >= 1.3) { status='Distancia reciente superior a la media previa'; tone='#facc15'; }
+    else if (ratio < 0.6) { status='Distancia reciente inferior a la media previa'; tone='#facc15'; }
+    else { status='Distancia reciente estable respecto a la media previa'; tone='#4ade80'; }
   }
-  return { km7:+km7.toFixed(1), km28:+km28.toFixed(1), prev7:+prev7.toFixed(1), changePct:changePct===null?null:+changePct.toFixed(1), acwr:acwr===null?null:+acwr.toFixed(2), status,tone, dayKm };
+  return {
+    km7:+km7.toFixed(1),
+    km28:+km28.toFixed(1),
+    prev7:+prev7.toFixed(1),
+    prior21Km:+prior21Km.toFixed(1),
+    chronicWeeklyAvg:+chronicWeeklyAvg.toFixed(1),
+    changePct:changePct===null?null:+changePct.toFixed(1),
+    acwr:ratio===null?null:+ratio.toFixed(2),
+    status,tone
+  };
 }
 
 function computePaceHrTrend() {
   const rows = Object.values(S.activities)
-    .filter(a => a.avgHr && a.movingTimeSec && a.distanceKm >= 3 && a.avgSpeed)
+    .filter(a => ['Run','TrailRun'].includes(a.sportType))
+    .filter(a => a.date <= fmt(today) && a.avgHr && a.movingTimeSec && a.distanceKm >= 3 && a.avgSpeed > 0)
     .filter(a => a.workoutType === 0 || a.workoutType === 2 || a.workoutType === undefined || a.workoutType === null)
-    .sort((a,b)=>a.date.localeCompare(b.date));
+    .sort((a,b)=>String(a.startLocal || a.date).localeCompare(String(b.startLocal || b.date)));
   if (!rows.length) return null;
   const recent = rows.slice(-6);
   const ef = recent.map(a => (a.avgSpeed * 60) / a.avgHr);
@@ -940,27 +981,55 @@ function computePaceHrTrend() {
   return { rows:recent, ef, change:+change.toFixed(1) };
 }
 
+function getCompletedExpectedSessionCount() {
+  let expected = 0, done = 0;
+  PLAN.forEach(w => {
+    [[1,w.day1Date],[2,w.day2Date],[3,w.day3Date]].forEach(([dayIdx,d]) => {
+      if (d <= today) {
+        expected++;
+        if (S.sessionsDone[`${w.week}-${dayIdx}`]) done++;
+      }
+    });
+  });
+  return { expected, done };
+}
+
 function computeCoach() {
   const load = computeLoadAnalytics();
-  const currentTarget = getCurrentWeekTarget();
-  const weekKm = getWeekKmOffset(0);
-  const longest = Object.values(S.activities).filter(a=>['Run','TrailRun'].includes(a.sportType)).reduce((m,a)=>Math.max(m,a.distanceKm||0),0);
-  const plannedLong = parseFloat(PLAN[currentWeekIndex()].badge) || 0;
-  const compliance = computeProgressStats()?.compliancePct;
+  const weekKm = weekRealKm(PLAN[currentWeekIndex()]);
+  const progress = computeProgressStats();
+  const compliance = progress?.compliancePct ?? null;
   const paceHr = computePaceHrTrend();
-  let score = 50;
-  if (currentTarget) score += Math.max(-10, Math.min(10, (weekKm/currentTarget)*20 - 10));
-  if (compliance !== null && compliance !== undefined) score += Math.max(-5, Math.min(10, (compliance-70)/3));
-  if (load.acwr !== null) score += load.acwr >= 1.5 ? -15 : load.acwr >= 1.3 ? -7 : load.acwr < .6 ? -3 : 8;
-  if (paceHr && paceHr.change > 2) score += 8;
-  score = Math.max(0, Math.min(100, Math.round(score)));
+  const target = getCurrentWeekLongRunTarget();
+  const todayLongRun = PLAN[currentWeekIndex()] ? weekLongRunRealKm(PLAN[currentWeekIndex()]) : 0;
+
+  // Índice descriptivo 0–100. No pretende medir una variable fisiológica real.
+  const components = [];
+  if (compliance !== null) components.push({ value: compliance, weight: 0.45 });
+  if (load.acwr !== null) {
+    const loadScore = Math.max(0, Math.min(100, 100 - Math.abs(load.acwr - 1) * 100));
+    components.push({ value: loadScore, weight: 0.30 });
+  }
+  if (target.unit === 'km' && target.min > 0 && today >= PLAN[currentWeekIndex()].day3Date) {
+    const longRunScore = Math.max(0, Math.min(100, (todayLongRun / target.min) * 100));
+    components.push({ value: longRunScore, weight: 0.15 });
+  }
+  if (paceHr) {
+    const efficiencyScore = Math.max(0, Math.min(100, 50 + paceHr.change * 5));
+    components.push({ value: efficiencyScore, weight: 0.10 });
+  }
+  const weightSum = components.reduce((s,c)=>s+c.weight,0);
+  const score = weightSum ? Math.round(components.reduce((s,c)=>s+c.value*c.weight,0)/weightSum) : null;
+
   const rec=[];
-  if (load.acwr !== null && load.acwr >= 1.3) rec.push('No aumentes el kilometraje esta semana; prioriza recuperación.');
-  else if (currentTarget && weekKm < currentTarget * .65 && today >= PLAN[currentWeekIndex()].start) rec.push(`Vas por ${weekKm.toFixed(1)} km de ${currentTarget} km planificados; completa solo lo que marque el plan, sin compensar de golpe.`);
-  if (plannedLong && longest < plannedLong * .75) rec.push(`Tu tirada más larga registrada aún está por debajo del objetivo de la semana (${plannedLong} km); progresa de forma gradual.`);
-  if (paceHr && paceHr.change > 2) rec.push('Tu eficiencia ritmo/FC reciente muestra una mejora; mantén el esfuerzo fácil en los rodajes de base.');
-  if (!rec.length) rec.push('El volumen reciente se ve estable. Mantén la progresión del plan y escucha la recuperación.');
-  return { score, load, compliance, paceHr, weekKm:+weekKm.toFixed(1), targetKm:currentTarget, longest:+longest.toFixed(1), recommendations:rec };
+  if (load.acwr !== null && load.acwr >= 1.3) rec.push('La distancia de los últimos 7 días está por encima de tu media semanal de las 3 semanas anteriores; evita aumentos bruscos.');
+  else if (load.acwr !== null && load.acwr < 0.6) rec.push('La distancia de los últimos 7 días está bastante por debajo de tu media previa; si estás retomando, aumenta gradualmente.');
+  if (target.unit === 'km' && todayLongRun < target.min && today >= PLAN[currentWeekIndex()].day3Date) rec.push(`Tirada larga: ${todayLongRun.toFixed(1)} km de ${target.label} planificados.`);
+  if (target.unit === 'min' && todayLongRun > 0) rec.push(`La tirada larga de esta semana está expresada en tiempo (${target.label}); Runner no la convierte a kilómetros.`);
+  if (paceHr && paceHr.change > 2) rec.push('La eficiencia ritmo/FC reciente ha mejorado; compárala solo entre rodajes de esfuerzo y condiciones similares.');
+  if (!rec.length) rec.push('Los datos disponibles no muestran una desviación importante respecto al plan actual.');
+
+  return { score, load, compliance, paceHr, weekKm:+weekKm.toFixed(1), target, longRunKm:+todayLongRun.toFixed(1), recommendations:rec };
 }
 
 function renderCoachCard() {
@@ -971,19 +1040,20 @@ function renderCoachCard() {
   const projectionLabel = projection ? secToHMS(projection) : '—';
   const gap = projection ? Math.round(projection-targetSec) : null;
   const gapLabel = gap === null ? '' : gap <= 0 ? 'Por debajo del objetivo estimado' : `+${secToHMS(gap)} sobre el objetivo`;
-  const scoreTone = c.score >= 75 ? '#4ade80' : c.score >= 55 ? '#facc15' : '#f87171';
+  const scoreTone = c.score === null ? 'rgba(255,255,255,.45)' : c.score >= 75 ? '#4ade80' : c.score >= 55 ? '#facc15' : '#f87171';
+  const scoreLabel = c.score === null ? 'Datos insuficientes' : c.score>=75?'Índice favorable':c.score>=55?'En progreso':'Necesita atención';
   return `<div class="backup-card" style="border-color:rgba(255,204,0,.28);">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
       <div><div class="eyebrow" style="margin-bottom:3px;">Coach Runner</div><div style="font-size:12px;color:rgba(255,255,255,.55);">Análisis automático de tus datos</div></div>
       <button data-goal-settings="1" style="font-size:11px;color:rgba(255,255,255,.45);text-decoration:underline;">Objetivos</button>
     </div>
     <div style="display:flex;align-items:center;gap:14px;margin-top:14px;">
-      <div style="width:70px;height:70px;border-radius:50%;border:6px solid ${scoreTone};display:flex;align-items:center;justify-content:center;flex:none;"><span class="font-display" style="font-size:24px;color:${scoreTone};">${c.score}</span></div>
-      <div><div style="font-size:15px;font-weight:800;color:${scoreTone};">${c.score>=75?'Preparación sólida':c.score>=55?'En progreso':'Necesita atención'}</div><div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:3px;">Carga: ${c.load.status}</div></div>
+      <div style="width:70px;height:70px;border-radius:50%;border:6px solid ${scoreTone};display:flex;align-items:center;justify-content:center;flex:none;"><span class="font-display" style="font-size:24px;color:${scoreTone};">${c.score ?? '—'}</span></div>
+      <div><div style="font-size:15px;font-weight:800;color:${scoreTone};">${scoreLabel}</div><div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:3px;">Distancia: ${c.load.status}</div></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px;">
       <div class="stat-card"><div class="val font-display">${c.weekKm} km</div><div class="lbl">Esta semana</div></div>
-      <div class="stat-card"><div class="val font-display">${c.load.acwr ?? '—'}</div><div class="lbl">Carga 7d / 28d</div></div>
+      <div class="stat-card"><div class="val font-display">${c.load.acwr ?? '—'}</div><div class="lbl">7d / media previa 21d</div></div>
       <div class="stat-card"><div class="val font-display">${projectionLabel}</div><div class="lbl">Proyección maratón</div></div>
       <div class="stat-card"><div class="val font-display">${targetLabel}</div><div class="lbl">Objetivo maratón</div></div>
     </div>
@@ -992,14 +1062,33 @@ function renderCoachCard() {
   </div>`;
 }
 
+function weekLongRunRealKm(week) {
+  const sameDay = Object.values(S.activities)
+    .filter(a => ['Run','TrailRun'].includes(a.sportType))
+    .filter(a => { const d = new Date(a.date + 'T00:00:00'); return fmt(d) === fmt(week.day3Date) && d <= today; });
+  // La tirada larga es una sesión; si hay varias actividades el mismo domingo,
+  // tomamos la más larga y no sumamos sesiones distintas como si fueran una sola.
+  return sameDay.reduce((max, a) => Math.max(max, Number(a.distanceKm) || 0), 0);
+}
+
 function renderWeeklyEvolutionCard() {
   const rows=[];
   const idx=currentWeekIndex();
   for(let i=Math.max(0,idx-3);i<=Math.min(PLAN.length-1,idx);i++) {
-    const w=PLAN[i], km=weekRealKm(w), target=parseFloat(w.badge)||0;
-    rows.push(`<div style="margin-top:9px;"><div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(255,255,255,.6);"><span>Sem ${w.week}</span><span>${km.toFixed(1)} / ${target||'—'} km</span></div><div style="height:6px;background:rgba(255,255,255,.08);border-radius:99px;overflow:hidden;margin-top:4px;"><div style="height:100%;width:${target?Math.min(100,(km/target)*100):0}%;background:#FFCC00;"></div></div></div>`);
+    const w=PLAN[i], weeklyKm=weekRealKm(w), target=w.longRunTarget;
+    const longKm=weekLongRunRealKm(w);
+    if(target.unit === 'km') {
+      const targetText = target.min === target.max ? `${target.min} km` : target.label;
+      const due = today >= w.day3Date;
+      const pct = due && target.min > 0 ? Math.min(100, (longKm / target.min) * 100) : 0;
+      const longLabel = due ? `${longKm.toFixed(1)} / ${targetText} · tirada larga` : `Pendiente · ${targetText} · tirada larga`;
+      rows.push(`<div style="margin-top:9px;"><div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(255,255,255,.6);"><span>Sem ${w.week}</span><span>${longLabel}</span></div><div style="height:6px;background:rgba(255,255,255,.08);border-radius:99px;overflow:hidden;margin-top:4px;"><div style="height:100%;width:${pct}%;background:#FFCC00;"></div></div><div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:3px;">${weeklyKm.toFixed(1)} km totales en la semana</div></div>`);
+    } else {
+      const plannedText=escapeHtml(target.label);
+      rows.push(`<div style="margin-top:9px;"><div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(255,255,255,.6);"><span>Sem ${w.week}</span><span>${weeklyKm.toFixed(1)} km totales</span></div><div style="height:6px;background:rgba(255,255,255,.08);border-radius:99px;overflow:hidden;margin-top:4px;"><div style="height:100%;width:0%;background:#FFCC00;"></div></div><div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:3px;">Tirada larga planificada: ${plannedText} · no se compara con km</div></div>`);
+    }
   }
-  return `<div class="backup-card"><div class="eyebrow">Evolución semanal</div>${rows.join('')}</div>`;
+  return `<div class="backup-card"><div class="eyebrow">Evolución semanal</div><div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:3px;">Los km totales y los objetivos de la tirada larga se muestran por separado para no mezclar unidades.</div>${rows.join('')}</div>`;
 }
 
 function openGoalSettingsModal() {
@@ -1011,8 +1100,9 @@ function openGoalSettingsModal() {
 
 function parseHMSInput(value) {
   const parts=String(value).trim().split(':').map(Number);
-  if(parts.length===3 && parts.every(Number.isFinite)) return parts[0]*3600+parts[1]*60+parts[2];
-  if(parts.length===2 && parts.every(Number.isFinite)) return parts[0]*60+parts[1];
+  if(!parts.length || parts.some(v => !Number.isFinite(v) || v < 0)) return null;
+  if(parts.length===3 && parts[1] < 60 && parts[2] < 60) return parts[0]*3600+parts[1]*60+parts[2];
+  if(parts.length===2 && parts[1] < 60) return parts[0]*60+parts[1];
   return null;
 }
 
@@ -1050,11 +1140,13 @@ function renderPaceHrCard() {
 function renderHome() {
   const daysToRace = Math.max(0, Math.round((RACE_DATE - today) / DAY_MS));
   const daysRunCount = S.runDays.length;
-  const sessionsCompletedCount = Object.keys(S.sessionsDone).length;
+  const completed = getCompletedExpectedSessionCount();
+  const sessionsCompletedCount = completed.done;
   const progressPct = Math.min(100, Math.round((sessionsCompletedCount / TOTAL_SESSIONS) * 100));
   const cw = PLAN[currentWeekIndex()];
   const cwRealKm = +weekRealKm(cw).toFixed(1);
-  const cwTargetKm = parseFloat(cw.badge) || null;
+  const cwLongTarget = cw.longRunTarget || { unit:null, label:'—', min:null, max:null };
+  const cwLongKm = +weekLongRunRealKm(cw).toFixed(1);
 
   const loggedWeights = Object.entries(S.weighIns).sort(([a],[b]) => a < b ? -1 : 1);
   const startWeight = S.weightSettings.startWeight;
@@ -1109,11 +1201,10 @@ function renderHome() {
           </div>
           <div class="pill">${cw.badge}</div>
         </div>
-        ${cwTargetKm ? `
         <div style="margin-top:10px;font-size:12px;color:rgba(255,255,255,0.6);">
-          Real esta semana: <span style="color:${cwRealKm >= cwTargetKm ? '#4ade80' : '#FFCC00'};font-weight:700;">${cwRealKm} km</span> de ${cwTargetKm} km planeados
-          ${cwRealKm > cwTargetKm * 1.15 ? ' ⚠️ vas adelantado del plan' : ''}
-        </div>` : ''}
+          Esta semana: <span style="color:#FFCC00;font-weight:700;">${cwRealKm} km totales</span>
+          ${cwLongTarget.unit === 'km' ? ` · Tirada larga: <span style="font-weight:700;">${cwLongKm} / ${cwLongTarget.label}</span>` : ` · Tirada larga planificada: <span style="font-weight:700;">${escapeHtml(cwLongTarget.label)}</span>`}
+        </div>
         <div class="dashed-rule"></div>
         <div class="cta">Toca para ver los 3 entrenamientos de esta semana →</div>
       </button>
@@ -1132,8 +1223,8 @@ function renderHome() {
 function shoeKmUsed() {
   const start = S.shoes.startDate;
   return Object.values(S.activities)
-    .filter(a => a.date >= start)
-    .reduce((sum, a) => sum + (a.distanceKm || 0), 0);
+    .filter(a => a.date >= start && a.date <= fmt(today))
+    .reduce((sum, a) => { const km=Number(a.distanceKm); return sum + (Number.isFinite(km) ? km : 0); }, 0);
 }
 
 function renderShoeCard() {
@@ -1315,7 +1406,8 @@ function saveRace(existingId) {
 
   if (!name) { showToast('Ponle un nombre al evento'); return; }
   if (!date) { showToast('Falta la fecha'); return; }
-  if (!distanceKm || distanceKm <= 0) { showToast('Falta la distancia'); return; }
+  if (!Number.isFinite(distanceKm) || distanceKm <= 0) { showToast('Falta la distancia'); return; }
+  if (m < 0 || m > 59 || s < 0 || s > 59 || h < 0 || h > 99) { showToast('Tiempo inválido'); return; }
 
   const race = {
     id: existingId || ('race_' + Date.now()),
@@ -1383,20 +1475,12 @@ function computePRs() {
   const results = {};
   PR_BUCKETS.forEach(b => { results[b.key] = null; });
 
-  Object.values(S.activities).forEach(a => {
-    PR_BUCKETS.forEach(b => {
-      const lo = b.km * (1 - b.tolerance), hi = b.km * (1 + b.tolerance);
-      if (a.distanceKm >= lo && a.distanceKm <= hi) {
-        const cur = results[b.key];
-        if (!cur || a.movingTimeSec < cur.timeSec) {
-          results[b.key] = { timeSec: a.movingTimeSec, date: a.date, source: 'Strava', distanceKm: a.distanceKm };
-        }
-      }
-    });
-  });
-
+  // Una actividad normal de entrenamiento no se considera PR solo por tener
+  // una distancia cercana a 5K/10K/etc. Las marcas aquí requieren un tiempo
+  // de carrera registrado explícitamente.
   (S.races || []).forEach(r => {
-    if (!r.timeSec) return;
+    if (r.date > fmt(today)) return;
+    if (!r.timeSec || !Number.isFinite(r.distanceKm) || r.distanceKm <= 0) return;
     PR_BUCKETS.forEach(b => {
       const lo = b.km * (1 - b.tolerance), hi = b.km * (1 + b.tolerance);
       if (r.distanceKm >= lo && r.distanceKm <= hi) {
@@ -1407,7 +1491,6 @@ function computePRs() {
       }
     });
   });
-
   return results;
 }
 
@@ -1434,7 +1517,7 @@ function renderPRsBlock() {
   return `
     <div class="dashed-rule"></div>
     <div style="margin-top:12px;">
-      <div class="eyebrow" style="margin-bottom:8px;">Tus mejores marcas</div>
+      <div class="eyebrow" style="margin-bottom:8px;">Tus mejores marcas registradas</div>
       ${rows}
     </div>
   `;
@@ -1477,94 +1560,84 @@ function linearRegression(points) {
 
 function computeEFData() {
   return Object.values(S.activities)
-    .filter(a => a.avgHr && a.avgSpeed && a.movingTimeSec >= 900) // mín. 15 min, con FC real
+    .filter(a => a.date <= fmt(today) && a.avgHr && a.avgSpeed && a.movingTimeSec >= 900) // mín. 15 min, con FC real
     .filter(a => a.workoutType === 0 || a.workoutType === 2 || a.workoutType === undefined || a.workoutType === null) // solo trote normal o carrera larga; excluye carreras (1) e intervalos/calidad (3)
     .sort((a, b) => a.date.localeCompare(b.date))
     .map(a => ({ date: a.date, ef: +((a.avgSpeed * 60) / a.avgHr).toFixed(3) }));
 }
 
-function computeACWR() {
-  // Acute:Chronic Workload Ratio (Gabbett et al.) — mide si tu carga reciente
-  // se disparó respecto a tu carga habitual. Complementa la regla del 10%,
-  // no la reemplaza: son dos lentes distintos sobre el mismo riesgo.
-  const acuteStart = addDays(today, -6);   // últimos 7 días (incl. hoy)
-  const chronicStart = addDays(today, -27); // últimos 28 días
+function computeDistanceRatio() {
+  // Ratio descriptivo de distancia: 7 días / media semanal de los 21 días previos.
+  // No se presenta como una medida clínica de carga total.
+  return computeLoadAnalytics();
+}
 
-  let acuteKm = 0, chronicKm = 0;
-  Object.values(S.activities).forEach(a => {
-    const d = new Date(a.date + 'T00:00:00');
-    if (d >= chronicStart && d <= today) chronicKm += a.distanceKm;
-    if (d >= acuteStart && d <= today) acuteKm += a.distanceKm;
+function getReferenceRace() {
+  const candidates = [];
+  (S.races || []).forEach(r => {
+    if (r.date > fmt(today)) return;
+    if (r.timeSec > 0 && r.distanceKm > 0) candidates.push({ timeSec:r.timeSec, distanceKm:r.distanceKm, date:r.date, source:'Carrera registrada' });
   });
-
-  const chronicWeeklyAvg = chronicKm / 4;
-  if (chronicWeeklyAvg <= 0) return null;
-
-  return {
-    acuteKm: +acuteKm.toFixed(1),
-    chronicWeeklyAvg: +chronicWeeklyAvg.toFixed(1),
-    acwr: +(acuteKm / chronicWeeklyAvg).toFixed(2),
-  };
+  Object.values(S.activities).forEach(a => {
+    if (a.date <= fmt(today) && ['Run','TrailRun'].includes(a.sportType) && a.workoutType === 1 && a.movingTimeSec > 0 && a.distanceKm >= 5) {
+      candidates.push({ timeSec:a.movingTimeSec, distanceKm:a.distanceKm, date:a.date, source:'Strava · carrera' });
+    }
+  });
+  candidates.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  return candidates[0] || null;
 }
 
 function computeProgressStats() {
-  const runs = Object.values(S.activities); // ya filtrado: solo Run/TrailRun
+  const runs = Object.values(S.activities).filter(a => ['Run','TrailRun'].includes(a.sportType));
   if (!runs.length) return null;
 
-  const totalKm = runs.reduce((s, a) => s + a.distanceKm, 0);
-  const totalSec = runs.reduce((s, a) => s + a.movingTimeSec, 0);
-  const avgPaceSecPerKm = totalSec / totalKm;
+  const validDistanceRuns = runs.filter(a => Number(a.distanceKm) > 0 && Number(a.movingTimeSec) > 0);
+  const totalKm = validDistanceRuns.reduce((s, a) => s + Number(a.distanceKm), 0);
+  const totalSec = validDistanceRuns.reduce((s, a) => s + Number(a.movingTimeSec), 0);
+  const avgPaceSecPerKm = totalKm > 0 ? totalSec / totalKm : null;
 
-  const longest = runs.reduce((max, a) => (!max || a.distanceKm > max.distanceKm) ? a : max, null);
+  const longest = validDistanceRuns.reduce((max, a) => (!max || a.distanceKm > max.distanceKm) ? a : max, null);
 
-  const weeklyKm = PLAN.map(w => ({ week: w.week, start: w.start, km: +weekRealKm(w).toFixed(2), target: parseFloat(w.badge) || null }));
-
-  // Solo compara semanas calendario realmente consecutivas con datos en ambas —
-  // si hay una semana vacía en medio (ej. una lesión), esa comparación se salta
-  // en vez de "puentear" el hueco como si fuera una sola semana de crecimiento.
-  let growthRates = [];
+  const weeklyKm = PLAN.map(w => ({ week: w.week, start: w.start, km: +weekRealKm(w).toFixed(2) }));
+  const growthRates = [];
   for (let i = 1; i < weeklyKm.length; i++) {
     const prev = weeklyKm[i - 1], cur = weeklyKm[i];
     if (prev.km > 0 && cur.km > 0) growthRates.push((cur.km - prev.km) / prev.km);
   }
-  const avgGrowthPct = growthRates.length ? Math.round((growthRates.reduce((a, b) => a + b, 0) / growthRates.length) * 100) : null;
+  const avgGrowthPct = growthRates.length ? +((growthRates.reduce((a,b)=>a+b,0)/growthRates.length)*100).toFixed(1) : null;
 
-  // Cumplimiento: solo cuenta como "hecha" una sesión si su fecha ya pasó,
-  // para que no se pueda superar 100% marcando semanas futuras de más.
-  let expectedCount = 0, doneCount = 0;
-  PLAN.forEach(w => {
-    [[1, w.day1Date], [2, w.day2Date], [3, w.day3Date]].forEach(([dayIdx, d]) => {
-      if (d <= today) {
-        expectedCount++;
-        if (S.sessionsDone[`${w.week}-${dayIdx}`]) doneCount++;
-      }
-    });
-  });
+  const { expected: expectedCount, done: doneCount } = getCompletedExpectedSessionCount();
   const compliancePct = expectedCount ? Math.round((doneCount / expectedCount) * 100) : null;
 
-  const withCadence = runs.filter(a => a.avgCadence);
-  const avgCadenceSpm = withCadence.length ? Math.round((withCadence.reduce((s, a) => s + a.avgCadence, 0) / withCadence.length) * 2) : null;
+  const withCadence = validDistanceRuns.filter(a => Number(a.avgCadence) > 0);
+  // Strava entrega average_cadence como cadencia de la actividad; no se duplica.
+  const cadenceWeight = withCadence.reduce((s,a)=>s+(Number(a.movingTimeSec)||0),0);
+  const avgCadenceSpm = withCadence.length && cadenceWeight > 0
+    ? Math.round(withCadence.reduce((s,a)=>s+Number(a.avgCadence)*(Number(a.movingTimeSec)||0),0)/cadenceWeight)
+    : withCadence.length ? Math.round(withCadence.reduce((s,a)=>s+Number(a.avgCadence),0)/withCadence.length) : null;
 
+  const referenceRace = getReferenceRace();
   let projectedRaceSec = null;
-  if (longest && longest.distanceKm >= 5) {
-    projectedRaceSec = longest.movingTimeSec * Math.pow(42.195 / longest.distanceKm, 1.06);
+  if (referenceRace && referenceRace.distanceKm > 0 && referenceRace.distanceKm < 42.195) {
+    projectedRaceSec = referenceRace.timeSec * Math.pow(42.195 / referenceRace.distanceKm, 1.06);
+  } else if (referenceRace && referenceRace.distanceKm === 42.195) {
+    projectedRaceSec = referenceRace.timeSec;
   }
 
-  // Semana pico: la de mayor kilometraje objetivo en todo el plan, calculada
-  // dinámicamente (no por texto fijo "32 km") para que nunca quede desincronizada
-  // si el plan cambia.
-  const peakWeek = PLAN.reduce((max, w) => {
-    const km = parseFloat(w.badge);
-    return (km && (!max || km > parseFloat(max.badge))) ? w : max;
+  const peakWeek = PLAN.reduce((max,w) => {
+    const km = w.longRunTarget?.unit === 'km' ? w.longRunTarget.max : null;
+    const maxKm = max?.longRunTarget?.unit === 'km' ? max.longRunTarget.max : null;
+    return (km !== null && (maxKm === null || km > maxKm)) ? w : max;
   }, null);
-  const peakTargetKm = peakWeek ? parseFloat(peakWeek.badge) : null;
+  const peakTargetKm = peakWeek?.longRunTarget?.unit === 'km' ? peakWeek.longRunTarget.max : null;
   const weeksToPeak = peakWeek ? Math.max(0, Math.round((peakWeek.start - today) / DAY_MS / 7)) : null;
-  const kmNeededToPeak = peakWeek ? +(peakTargetKm - (longest ? longest.distanceKm : 0)).toFixed(1) : null;
+  const maxRecordedDistance = longest ? longest.distanceKm : 0;
+  const kmNeededToPeak = peakTargetKm !== null ? +(peakTargetKm - maxRecordedDistance).toFixed(1) : null;
 
   return {
-    totalKm: +totalKm.toFixed(1), totalRuns: runs.length, avgPaceSecPerKm,
+    totalKm:+totalKm.toFixed(1), totalRuns:validDistanceRuns.length, avgPaceSecPerKm,
     longest, avgGrowthPct, compliancePct, doneCount, expectedCount,
-    avgCadenceSpm, projectedRaceSec, peakWeek, peakTargetKm, weeksToPeak, kmNeededToPeak,
+    avgCadenceSpm, projectedRaceSec, referenceRace, peakWeek, peakTargetKm, weeksToPeak, kmNeededToPeak,
   };
 }
 
@@ -1583,46 +1656,42 @@ function renderProgressSection() {
   const avgPaceRounded = Math.round(st.avgPaceSecPerKm);
   const paceStr = `${Math.floor(avgPaceRounded/60)}:${(avgPaceRounded%60).toString().padStart(2,'0')} /km`;
 
-  const growthWarning = st.avgGrowthPct !== null && st.avgGrowthPct > 10;
+  const growthWarning = false;
   const growthNote = st.avgGrowthPct === null ? 'Aún no hay suficientes semanas con datos para calcular tu ritmo de progresión.'
     : growthWarning
-      ? `Estás subiendo tu volumen semanal ~${st.avgGrowthPct}% en promedio — por encima del 10% recomendado. Riesgo de lesión si se mantiene.`
-      : `Estás subiendo tu volumen semanal ~${st.avgGrowthPct}% en promedio — dentro de un rango seguro (≤10%).`;
+      ? `El cambio medio entre semanas consecutivas con datos es de ~${st.avgGrowthPct}%. Es una descripción estadística, no un umbral médico.`
+      : `El cambio medio entre semanas consecutivas con datos es de ~${st.avgGrowthPct}%. Es una descripción estadística, no un umbral médico.`;
 
   const complianceNote = st.compliancePct === null ? ''
     : st.compliancePct >= 90 ? `Cumplimiento del plan: ${st.compliancePct}% — excelente disciplina.`
     : st.compliancePct >= 60 ? `Cumplimiento del plan: ${st.compliancePct}% — razonable, pero busca no saltarte sesiones.`
     : `Cumplimiento del plan: ${st.compliancePct}% — vas dejando sesiones sin correr; esto puede afectar tu resistencia de cara al maratón.`;
 
-  const acwr = computeACWR();
+  const acwr = computeDistanceRatio();
   const acwrNote = !acwr ? null
-    : acwr.acwr < 0.8 ? { color: '#facc15', text: `ACWR: ${acwr.acwr} — tu carga de esta semana está bastante por debajo de tu promedio de 4 semanas (${acwr.chronicWeeklyAvg} km/sem). No es peligroso, pero si es por una lesión o descanso, ve subiendo gradual al volver.` }
-    : acwr.acwr <= 1.3 ? { color: '#4ade80', text: `ACWR: ${acwr.acwr} — tu carga aguda (${acwr.acuteKm} km esta semana) está en línea con tu carga crónica (${acwr.chronicWeeklyAvg} km/sem promedio). Zona considerada de menor riesgo en la literatura deportiva.` }
-    : acwr.acwr <= 1.5 ? { color: '#facc15', text: `ACWR: ${acwr.acwr} — tu carga de esta semana (${acwr.acuteKm} km) subió más rápido que tu promedio (${acwr.chronicWeeklyAvg} km/sem). Zona de precaución.` }
-    : { color: '#f87171', text: `ACWR: ${acwr.acwr} — salto grande respecto a tu carga habitual (${acwr.acuteKm} km esta semana vs. ${acwr.chronicWeeklyAvg} km/sem promedio). Esta zona se asocia con más riesgo de lesión en varios estudios.` };
+    : acwr.acwr < 0.8 ? { color: '#facc15', text: `Ratio de distancia: ${acwr.acwr} — 7 días: ${acwr.km7} km frente a una media de ${acwr.chronicWeeklyAvg} km/sem en los 21 días previos.` }
+    : acwr.acwr <= 1.3 ? { color: '#4ade80', text: `Ratio de distancia: ${acwr.acwr} — 7 días: ${acwr.km7} km frente a una media de ${acwr.chronicWeeklyAvg} km/sem en los 21 días previos.` }
+    : acwr.acwr <= 1.5 ? { color: '#facc15', text: `Ratio de distancia: ${acwr.acwr} — la distancia reciente está por encima de la media previa (${acwr.km7} vs. ${acwr.chronicWeeklyAvg} km/sem).` }
+    : { color: '#f87171', text: `Ratio de distancia: ${acwr.acwr} — la distancia reciente está muy por encima de la media previa (${acwr.km7} vs. ${acwr.chronicWeeklyAvg} km/sem).` };
 
   const cadenceNote = st.avgCadenceSpm === null ? ''
-    : st.avgCadenceSpm < 160 ? `Cadencia promedio: ~${st.avgCadenceSpm} pasos/min — baja (ideal 170-180). Zancada larga = más impacto en rodillas/tobillos. Trabaja pasos más cortos y rápidos.`
-    : `Cadencia promedio: ~${st.avgCadenceSpm} pasos/min — dentro de un rango saludable.`;
+    : `Cadencia promedio registrada: ~${st.avgCadenceSpm} pasos/min.`;
 
   const peakProjection = st.peakWeek
     ? (st.kmNeededToPeak <= 0
         ? `Ya superaste los ${st.peakTargetKm} km de tu semana pico (${st.peakWeek.week}) en tu carrera más larga hasta hoy. Cuidado con no forzar de más antes de tiempo.`
-        : `Te faltan ${st.kmNeededToPeak} km para llegar a tu carrera larga máxima de ${st.peakTargetKm} km (semana ${st.peakWeek.week}, ${st.weeksToPeak} semana(s) a partir de hoy). Con incrementos del 10% semanal en tu carrera larga, es una meta alcanzable si mantienes constancia.`)
+        : `Te faltan ${st.kmNeededToPeak} km para llegar a tu carrera larga máxima de ${st.peakTargetKm} km (semana ${st.peakWeek.week}, ${st.weeksToPeak} semana(s) a partir de hoy). La diferencia es solo una referencia matemática entre tu distancia máxima registrada y el objetivo del plan.`)
     : '';
 
-  const riegelReliability = !st.longest ? ''
-    : st.longest.distanceKm >= 21 ? ' Al venir de una distancia de medio maratón o más, esta es la proyección más confiable que da Riegel.'
-    : st.longest.distanceKm >= 15 ? ' Ojo: viene de una distancia todavía bastante menor al maratón, así que tómala con reserva moderada — se vuelve más precisa conforme corras más largo.'
-    : ' Ojo: es una extrapolación muy amplia (de menos de 15 km a 42.195 km), la fórmula de Riegel pierde precisión en saltos así de grandes — tómala solo como referencia lejana, no como predicción real todavía.';
-  const raceProjectionNote = st.projectedRaceSec
-    ? `Con tu carrera más larga hasta ahora (${st.longest.distanceKm} km a ${st.longest.paceStr}), una proyección estimada (fórmula de Riegel) da un tiempo de maratón aproximado de <strong>${secToHMS(st.projectedRaceSec)}</strong>. Esto es solo una estimación matemática con tu nivel actual — normalmente mejora conforme aumentas kilometraje y resistencia de base.${riegelReliability}`
-    : `Necesitas al menos una carrera de 5 km o más registrada para calcular una proyección de tiempo de maratón.`;
+  const reference = st.referenceRace;
+  const raceProjectionNote = st.projectedRaceSec && reference
+    ? `Usando tu referencia de ${reference.distanceKm.toFixed(2)} km en ${secToHMS(reference.timeSec)} (${reference.source}, ${fmtShort(new Date(reference.date + 'T00:00:00'))}), la fórmula de Riegel (1.06) estima <strong>${secToHMS(st.projectedRaceSec)}</strong> para 42.195 km. Es una extrapolación matemática, no una garantía de rendimiento.`
+    : `No hay una carrera de referencia válida para proyectar el maratón. Registra una carrera con distancia y tiempo, o sincroniza una actividad de Strava marcada como carrera.`;
 
   const cadenceData = Object.values(S.activities)
     .filter(a => a.avgCadence)
     .sort((a, b) => a.date.localeCompare(b.date))
-    .map(a => ({ date: a.date, cadence: Math.round(a.avgCadence * 2) }));
+    .map(a => ({ date: a.date, cadence: Math.round(a.avgCadence) }));
   let cadenceTrend = null;
   if (cadenceData.length >= 2) {
     cadenceTrend = linearRegression(cadenceData.map((d, i) => ({ x: i, y: d.cadence })));
@@ -1662,7 +1731,7 @@ function renderProgressSection() {
           <div class="font-display" style="font-size:20px;color:#FFCC00;">${st.totalKm} km</div>
         </div>
         <div style="background:#151515;border-radius:12px;padding:10px;">
-          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Carreras registradas</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Actividades de carrera</div>
           <div class="font-display" style="font-size:20px;color:#FFCC00;">${st.totalRuns}</div>
         </div>
         <div style="background:#151515;border-radius:12px;padding:10px;">
@@ -1670,15 +1739,15 @@ function renderProgressSection() {
           <div class="font-display" style="font-size:20px;color:#FFCC00;">${paceStr}</div>
         </div>
         <div style="background:#151515;border-radius:12px;padding:10px;">
-          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Carrera más larga</div>
-          <div class="font-display" style="font-size:20px;color:#FFCC00;">${st.longest.distanceKm} km</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Distancia máxima registrada</div>
+          <div class="font-display" style="font-size:20px;color:#FFCC00;">${st.longest ? st.longest.distanceKm : '—'} km</div>
         </div>
       </div>
 
       <div class="dashed-rule"></div>
 
       <div style="margin-top:12px;">
-        <div class="eyebrow" style="margin-bottom:8px;">Proyección al 13 de diciembre</div>
+        <div class="eyebrow" style="margin-bottom:8px;">Proyección al maratón</div>
         <div style="font-size:13px;color:rgba(255,255,255,0.75);line-height:1.5;margin-bottom:8px;">${raceProjectionNote}</div>
         ${peakProjection ? `<div style="font-size:13px;color:rgba(255,255,255,0.75);line-height:1.5;">${peakProjection}</div>` : ''}
       </div>
@@ -1686,11 +1755,10 @@ function renderProgressSection() {
       ${cadenceData.length >= 2 ? `
       <div class="dashed-rule"></div>
       <div style="margin-top:12px;">
-        <div class="eyebrow" style="margin-bottom:4px;">Cadencia por carrera</div>
-        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:8px;">Pasos por minuto (ambos pies). El número junto a cada punto es tu cadencia real de esa carrera.</div>
+        <div class="eyebrow" style="margin-bottom:4px;">Cadencia por actividad</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:8px;">Pasos por minuto. El número junto a cada punto es la cadencia registrada por Strava.</div>
         <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:6px;">
           <span><span style="color:#4ade80;">●</span> Tu cadencia</span>
-          <span><span style="color:rgba(255,255,255,0.55);">┄</span> Mínimo recomendado (170)</span>
           <span style="color:${cadenceData.length >= 4 ? '#7dd3fc' : 'rgba(255,255,255,0.25)'};"><span style="color:${cadenceData.length >= 4 ? '#7dd3fc' : 'rgba(255,255,255,0.25)'};">┄</span> Tu tendencia${cadenceData.length < 4 ? ` (con 4+ carreras)` : ''}</span>
         </div>
         <div class="chart-card"><canvas id="cadenceCanvas" style="width:100%;height:100%;"></canvas></div>
@@ -2121,7 +2189,9 @@ function renderCalendar() {
 function renderPeso() {
   const startWeight = S.weightSettings.startWeight;
   const monthDays = WEIGH_DAYS.filter(d => d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth());
-  const chartData = Object.entries(S.weighIns).sort(([a],[b]) => a < b ? -1 : 1)
+  const chartData = Object.entries(S.weighIns)
+    .filter(([date]) => date <= fmt(today))
+    .sort(([a],[b]) => a < b ? -1 : 1)
     .map(([date, weight]) => ({ date, weight: parseFloat(weight) }));
   const lastWeight = chartData.length ? chartData[chartData.length-1].weight : startWeight;
   const delta = +(lastWeight - startWeight).toFixed(1);
