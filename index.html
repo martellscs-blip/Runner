@@ -391,11 +391,16 @@ let S = {
   },
   shoes: {
     name: 'Hoka',
-    startDate: fmt(today), // se puede editar/reiniciar desde la tarjeta de tenis
-    thresholdKm: 550,    // km recomendados de vida útil
+    startDate: fmt(today),
+    thresholdKm: 550,
+    history: [], // pares anteriores: {name,startDate,thresholdKm,retiredDate}
   },
   weightSettings: {
-    startWeight: 92,      // única fuente de verdad; editable desde la pestaña Peso
+    startWeight: 92,
+    targetWeight: null,
+  },
+  goals: {
+    marathonTargetSec: 15300, // 4:15:00; editable desde Coach Runner
   },
   races: [],               // { id, name, date, distanceKm, timeSec, notes }
 };
@@ -410,16 +415,27 @@ const STRAVA_CLIENT_ID = '273128';
 const STRAVA_CLIENT_SECRET = 'd6c812b645e4d0c62d0587c3cc2f4b0cdbd28c55';
 const STRAVA_REDIRECT_URI = 'https://martellscs-blip.github.io/Runner/';
 const STRAVA_SCOPE = 'activity:read_all,profile:read_all';
+const STRAVA_API_BASE = 'https://api-v3.strava.com/api/v3';
+const STRAVA_OAUTH_BASE = 'https://www.strava.com/oauth';
+
+function makeOAuthState() {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2,'0')).join('');
+}
 
 function stravaAuthUrl() {
+  const state = makeOAuthState();
+  try { sessionStorage.setItem('runner-strava-oauth-state', state); } catch (_) {}
   const params = new URLSearchParams({
     client_id: STRAVA_CLIENT_ID,
     redirect_uri: STRAVA_REDIRECT_URI,
     response_type: 'code',
     approval_prompt: 'auto',
     scope: STRAVA_SCOPE,
+    state,
   });
-  return `https://www.strava.com/oauth/authorize?${params.toString()}`;
+  return `${STRAVA_OAUTH_BASE}/authorize?${params.toString()}`;
 }
 
 function stravaConnected() {
@@ -428,7 +444,7 @@ function stravaConnected() {
 
 async function exchangeStravaCode(code) {
   try {
-    const res = await fetch('https://www.strava.com/oauth/token', {
+    const res = await fetch(`${STRAVA_OAUTH_BASE}/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -438,7 +454,10 @@ async function exchangeStravaCode(code) {
         grant_type: 'authorization_code',
       }),
     });
-    if (!res.ok) throw new Error('token exchange failed');
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`token exchange failed: ${res.status}${detail ? ` — ${detail.slice(0,180)}` : ''}`);
+    }
     const data = await res.json();
     S.strava.accessToken = data.access_token;
     S.strava.refreshToken = data.refresh_token;
@@ -456,12 +475,12 @@ async function exchangeStravaCode(code) {
   }
 }
 
-async function refreshStravaTokenIfNeeded() {
+async function refreshStravaTokenIfNeeded(force = false) {
   if (!stravaConnected()) return false;
   const nowSec = Math.floor(Date.now() / 1000);
-  if (S.strava.expiresAt && S.strava.expiresAt - nowSec > 300) return true; // sigue vigente
+  if (!force && S.strava.expiresAt && S.strava.expiresAt - nowSec > 300) return true; // sigue vigente
   try {
-    const res = await fetch('https://www.strava.com/oauth/token', {
+    const res = await fetch(`${STRAVA_OAUTH_BASE}/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -471,7 +490,10 @@ async function refreshStravaTokenIfNeeded() {
         grant_type: 'refresh_token',
       }),
     });
-    if (!res.ok) throw new Error('refresh failed');
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`refresh failed: ${res.status}${detail ? ` — ${detail.slice(0,180)}` : ''}`);
+    }
     const data = await res.json();
     S.strava.accessToken = data.access_token;
     S.strava.refreshToken = data.refresh_token;
@@ -513,25 +535,18 @@ function secToDuration(sec) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-// Marca automáticamente solo la sesión cuya fecha coincide exactamente con la actividad.
-// Si corres otro día, NO se marca una sesión distinta por accidente.
-function autoMarkSession(dateObj) {
+// Busca una sesión del plan cuya fecha coincida exactamente con la actividad.
+// NO la marca automáticamente: el usuario debe confirmar la asociación.
+function findExactSessionForDate(dateObj) {
   const weekIdx = PLAN.findIndex(w => dateObj >= w.start && dateObj <= w.end);
-  if (weekIdx < 0) return false;
+  if (weekIdx < 0) return null;
   const week = PLAN[weekIdx];
   const dateStr = fmt(dateObj);
-  const exactMap = [
-    [1, week.day1Date],
-    [2, week.day2Date],
-    [3, week.day3Date],
-  ];
+  const exactMap = [[1, week.day1Date], [2, week.day2Date], [3, week.day3Date]];
   for (const [dayIdx, d] of exactMap) {
-    if (fmt(d) === dateStr) {
-      S.sessionsDone[`${week.week}-${dayIdx}`] = true;
-      return true;
-    }
+    if (fmt(d) === dateStr) return { key: `${week.week}-${dayIdx}`, week, dayIdx };
   }
-  return false;
+  return null;
 }
 
 async function syncStravaActivities(silent) {
@@ -543,33 +558,67 @@ async function syncStravaActivities(silent) {
   if (!silent) render();
 
   try {
-    const after = S.strava.lastSyncEpoch || Math.floor(PLAN_START.getTime() / 1000) - 86400;
+    const after = Math.max(Math.floor(PLAN_START.getTime() / 1000) - 86400, (S.strava.lastSyncEpoch || 0) - 7 * 86400);
     let page = 1;
     let newCount = 0;
     let maxEpoch = after;
 
     while (true) {
       const params = new URLSearchParams({ after: String(after), per_page: '100', page: String(page) });
-      const res = await fetch(`https://www.strava.com/api/v3/athlete/activities?${params.toString()}`, {
+      const res = await fetch(`${STRAVA_API_BASE}/athlete/activities?${params.toString()}`, {
         headers: { Authorization: `Bearer ${S.strava.accessToken}` },
       });
       if (!res.ok) {
         let detail = '';
         try { detail = await res.text(); } catch (_) {}
-        throw new Error(`activities fetch failed: ${res.status} ${detail}`);
+        if (res.status === 401 && page === 1) {
+          const refreshed = await refreshStravaTokenIfNeeded(true);
+          if (refreshed) {
+            const retry = await fetch(`${STRAVA_API_BASE}/athlete/activities?${params.toString()}`, { headers: { Authorization: `Bearer ${S.strava.accessToken}` } });
+            if (retry.ok) {
+              const retryList = await retry.json();
+              // Procesa esta primera página usando el mismo flujo principal.
+              for (const act of retryList) {
+                const sportType = act.sport_type || act.type;
+                const epoch = Math.floor(new Date(act.start_date).getTime() / 1000);
+                if (epoch > maxEpoch) maxEpoch = epoch;
+                if (!['Run','TrailRun'].includes(sportType)) continue;
+                const isNewActivity = !S.activities[act.id];
+                const startLocal = new Date(act.start_date_local);
+                const dateStr = fmt(startLocal);
+                S.activities[act.id] = {
+                  id: act.id, name: act.name, sportType, date: dateStr, startLocal: act.start_date_local,
+                  distanceKm: +(act.distance / 1000).toFixed(2), movingTimeSec: act.moving_time, elapsedTimeSec: act.elapsed_time,
+                  paceStr: secToPaceStr(act.moving_time, act.distance), elevationGain: act.total_elevation_gain,
+                  calories: act.calories || null, avgHr: act.average_heartrate || null, maxHr: act.max_heartrate || null,
+                  avgCadence: act.average_cadence || null, workoutType: act.workout_type, avgSpeed: act.average_speed,
+                  maxSpeed: act.max_speed, kudos: act.kudos_count, prCount: act.pr_count,
+                  matchedSessionKey: findExactSessionForDate(startLocal)?.key || null,
+                };
+                const match = findExactSessionForDate(startLocal);
+                if (match && !S.sessionsDone[match.key]) S.activities[act.id].pendingSessionKey = match.key;
+                if (!S.runDays.includes(dateStr)) S.runDays.push(dateStr);
+                if (isNewActivity) newCount++;
+              }
+              break;
+            }
+          }
+        }
+        throw new Error(`activities fetch failed: ${res.status}${detail ? ` — ${detail.slice(0,180)}` : ''}`);
       }
       const list = await res.json();
       if (!list.length) break;
 
       for (const act of list) {
         const sportType = act.sport_type || act.type;
+        const epoch = Math.floor(new Date(act.start_date).getTime() / 1000);
+        if (epoch > maxEpoch) maxEpoch = epoch;
         const isRun = ['Run', 'TrailRun'].includes(sportType);
         if (!isRun) continue; // solo carreras: se ignoran pesas, ciclismo, caminata, etc.
 
+        const isNewActivity = !S.activities[act.id];
         const startLocal = new Date(act.start_date_local);
         const dateStr = fmt(startLocal);
-        const epoch = Math.floor(new Date(act.start_date).getTime() / 1000);
-        if (epoch > maxEpoch) maxEpoch = epoch;
 
         S.activities[act.id] = {
           id: act.id,
@@ -591,11 +640,12 @@ async function syncStravaActivities(silent) {
           maxSpeed: act.max_speed,
           kudos: act.kudos_count,
           prCount: act.pr_count,
+          matchedSessionKey: findExactSessionForDate(startLocal)?.key || null,
         };
-        newCount++;
-
         if (!S.runDays.includes(dateStr)) S.runDays.push(dateStr);
-        autoMarkSession(startLocal);
+        const match = findExactSessionForDate(startLocal);
+        if (match && !S.sessionsDone[match.key]) S.activities[act.id].pendingSessionKey = match.key;
+        if (isNewActivity) newCount++;
       }
 
       if (list.length < 100) break;
@@ -611,10 +661,10 @@ async function syncStravaActivities(silent) {
     console.error('Strava sync error:', e);
     const status = String(e && e.message || '').match(/\b(401|403|429|500|502|503)\b/)?.[1];
     S.strava.error = status === '401'
-      ? 'Strava rechazó el acceso. Reconecta la cuenta.'
+      ? 'Strava rechazó el acceso (401). Se intentó renovar el token; si persiste, reconecta la cuenta.'
       : status === '429'
         ? 'Strava alcanzó el límite de solicitudes. Intenta más tarde.'
-        : 'No se pudo sincronizar con Strava';
+        : (String(e && e.message || '').includes('403') ? 'Strava denegó el acceso (403). Revisa que la autorización incluya actividad.' : String(e && e.message || '').includes('500') || String(e && e.message || '').includes('502') || String(e && e.message || '').includes('503') ? 'Strava no respondió correctamente. Intenta de nuevo en unos minutos.' : 'No se pudo sincronizar con Strava');
     if (!silent) showToast(S.strava.error);
   } finally {
     S.strava.syncing = false;
@@ -627,15 +677,24 @@ async function handleStravaRedirect() {
   const params = new URLSearchParams(window.location.search);
   const code = params.get('code');
   const error = params.get('error');
+  const returnedState = params.get('state');
+  let savedState = null;
+  try { savedState = sessionStorage.getItem('runner-strava-oauth-state'); sessionStorage.removeItem('runner-strava-oauth-state'); } catch (_) {}
   if (error) {
-    showToast('Conexión con Strava cancelada');
+    showToast(error === 'access_denied' ? 'Conexión con Strava cancelada' : `Strava devolvió un error: ${error}`);
     window.history.replaceState({}, '', STRAVA_REDIRECT_URI);
     return;
   }
   if (code) {
-    await exchangeStravaCode(code);
+    if (!savedState || returnedState !== savedState) {
+      S.strava.error = 'No se pudo validar la conexión con Strava. Intenta conectar de nuevo.';
+      showToast(S.strava.error);
+      window.history.replaceState({}, '', STRAVA_REDIRECT_URI);
+      return;
+    }
+    const connected = await exchangeStravaCode(code);
     window.history.replaceState({}, '', STRAVA_REDIRECT_URI);
-    await syncStravaActivities(true);
+    if (connected) await syncStravaActivities(true);
   }
 }
 
@@ -666,6 +725,7 @@ async function loadState() {
     if (parsed.github) S.github = { ...S.github, ...parsed.github };
     if (parsed.shoes) S.shoes = { ...S.shoes, ...parsed.shoes };
     if (parsed.weightSettings) S.weightSettings = { ...S.weightSettings, ...parsed.weightSettings };
+    if (parsed.goals) S.goals = { ...S.goals, ...parsed.goals };
     if (Array.isArray(parsed.races)) S.races = parsed.races;
   }
 }
@@ -675,7 +735,7 @@ async function persist() {
     runDays: S.runDays, weighIns: S.weighIns, sessionsDone: S.sessionsDone,
     activities: S.activities, strava: S.strava,
     googleDrive: S.googleDrive, github: S.github, shoes: S.shoes,
-    weightSettings: S.weightSettings, races: S.races,
+    weightSettings: S.weightSettings, goals: S.goals, races: S.races,
   });
 
   let savedOk = false;
@@ -746,7 +806,7 @@ function renderStravaCard() {
         <span style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;">${icon('zap',15,'#fff')} ${st.syncing ? 'Sincronizando…' : `Conectado · ${escapeHtml((st.athleteName || 'Strava').toUpperCase())}`}</span>
         ${!st.syncing ? `<span style="font-size:11px;font-weight:500;opacity:0.85;">Última sincronización: ${lastSync}</span>` : ''}
       </button>
-      ${st.error ? `<div style="font-size:11px;color:#f87171;margin-top:8px;">${st.error}</div>` : ''}
+      ${st.error ? `<div style="font-size:11px;color:#f87171;margin-top:8px;line-height:1.45;">${escapeHtml(st.error)}</div>` : `<div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:7px;">API V3 · sincronización incremental</div>`}
     </div>
   `;
 }
@@ -774,6 +834,7 @@ function renderRecentActivities() {
         ${a.avgHr ? `<span>❤ ${Math.round(a.avgHr)} ppm</span>` : ''}
         ${a.avgCadence ? `<span>👟 ${Math.round(a.avgCadence * 2)} spm</span>` : ''}
       </div>
+      ${a.pendingSessionKey && !S.sessionsDone[a.pendingSessionKey] ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,0.08);display:flex;justify-content:space-between;align-items:center;gap:8px;"><span style="font-size:11px;color:rgba(255,255,255,0.55);">Coincide con un entrenamiento del plan.</span><button class="mini-btn" data-associate-session="${escapeHtml(a.pendingSessionKey)}" data-associate-activity="${escapeHtml(String(a.id))}">Asociar ✓</button></div>` : ''}
     </div>
   `).join('');
   return `
@@ -831,6 +892,161 @@ function renderTrainingStatusCard() {
   `;
 }
 
+
+function getWeekKmOffset(offset) {
+  const idx = currentWeekIndex() + offset;
+  if (idx < 0 || idx >= PLAN.length) return 0;
+  return weekRealKm(PLAN[idx]);
+}
+
+function getCurrentWeekTarget() {
+  const w = PLAN[currentWeekIndex()];
+  return parseFloat(w.badge) || 0;
+}
+
+function computeLoadAnalytics() {
+  const runs = Object.values(S.activities).filter(a => ['Run','TrailRun'].includes(a.sportType));
+  const dayKm = {};
+  runs.forEach(a => { dayKm[a.date] = (dayKm[a.date] || 0) + (a.distanceKm || 0); });
+  const acuteStart = addDays(today, -6);
+  const chronicStart = addDays(today, -27);
+  const km7 = runs.filter(a => { const d=new Date(a.date+'T00:00:00'); return d>=acuteStart && d<=today; }).reduce((s,a)=>s+a.distanceKm,0);
+  const km28 = runs.filter(a => { const d=new Date(a.date+'T00:00:00'); return d>=chronicStart && d<=today; }).reduce((s,a)=>s+a.distanceKm,0);
+  const chronicAvg = km28 / 4;
+  const acwr = chronicAvg > 0 ? km7 / chronicAvg : null;
+  const previous7Start = addDays(today, -13), previous7End = addDays(today, -7);
+  const prev7 = runs.filter(a => { const d=new Date(a.date+'T00:00:00'); return d>=previous7Start && d<=previous7End; }).reduce((s,a)=>s+a.distanceKm,0);
+  const changePct = prev7 > 0 ? ((km7-prev7)/prev7)*100 : null;
+  let status='Sin suficientes datos', tone='rgba(255,255,255,.5)';
+  if (acwr !== null) {
+    if (acwr >= 1.5) { status='Carga alta: reduce o mantén volumen'; tone='#f87171'; }
+    else if (acwr >= 1.3) { status='Carga elevada: vigila recuperación'; tone='#facc15'; }
+    else if (acwr < 0.6) { status='Carga baja: puedes progresar gradualmente'; tone='#facc15'; }
+    else { status='Carga estable'; tone='#4ade80'; }
+  }
+  return { km7:+km7.toFixed(1), km28:+km28.toFixed(1), prev7:+prev7.toFixed(1), changePct:changePct===null?null:+changePct.toFixed(1), acwr:acwr===null?null:+acwr.toFixed(2), status,tone, dayKm };
+}
+
+function computePaceHrTrend() {
+  const rows = Object.values(S.activities)
+    .filter(a => a.avgHr && a.movingTimeSec && a.distanceKm >= 3 && a.avgSpeed)
+    .filter(a => a.workoutType === 0 || a.workoutType === 2 || a.workoutType === undefined || a.workoutType === null)
+    .sort((a,b)=>a.date.localeCompare(b.date));
+  if (!rows.length) return null;
+  const recent = rows.slice(-6);
+  const ef = recent.map(a => (a.avgSpeed * 60) / a.avgHr);
+  const first = ef[0], last = ef[ef.length-1];
+  const change = first > 0 ? ((last-first)/first)*100 : 0;
+  return { rows:recent, ef, change:+change.toFixed(1) };
+}
+
+function computeCoach() {
+  const load = computeLoadAnalytics();
+  const currentTarget = getCurrentWeekTarget();
+  const weekKm = getWeekKmOffset(0);
+  const longest = Object.values(S.activities).filter(a=>['Run','TrailRun'].includes(a.sportType)).reduce((m,a)=>Math.max(m,a.distanceKm||0),0);
+  const plannedLong = parseFloat(PLAN[currentWeekIndex()].badge) || 0;
+  const compliance = computeProgressStats()?.compliancePct;
+  const paceHr = computePaceHrTrend();
+  let score = 50;
+  if (currentTarget) score += Math.max(-10, Math.min(10, (weekKm/currentTarget)*20 - 10));
+  if (compliance !== null && compliance !== undefined) score += Math.max(-5, Math.min(10, (compliance-70)/3));
+  if (load.acwr !== null) score += load.acwr >= 1.5 ? -15 : load.acwr >= 1.3 ? -7 : load.acwr < .6 ? -3 : 8;
+  if (paceHr && paceHr.change > 2) score += 8;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const rec=[];
+  if (load.acwr !== null && load.acwr >= 1.3) rec.push('No aumentes el kilometraje esta semana; prioriza recuperación.');
+  else if (currentTarget && weekKm < currentTarget * .65 && today >= PLAN[currentWeekIndex()].start) rec.push(`Vas por ${weekKm.toFixed(1)} km de ${currentTarget} km planificados; completa solo lo que marque el plan, sin compensar de golpe.`);
+  if (plannedLong && longest < plannedLong * .75) rec.push(`Tu tirada más larga registrada aún está por debajo del objetivo de la semana (${plannedLong} km); progresa de forma gradual.`);
+  if (paceHr && paceHr.change > 2) rec.push('Tu eficiencia ritmo/FC reciente muestra una mejora; mantén el esfuerzo fácil en los rodajes de base.');
+  if (!rec.length) rec.push('El volumen reciente se ve estable. Mantén la progresión del plan y escucha la recuperación.');
+  return { score, load, compliance, paceHr, weekKm:+weekKm.toFixed(1), targetKm:currentTarget, longest:+longest.toFixed(1), recommendations:rec };
+}
+
+function renderCoachCard() {
+  const c = computeCoach();
+  const targetSec = S.goals?.marathonTargetSec || 15300;
+  const projection = computeProgressStats()?.projectedRaceSec || null;
+  const targetLabel = secToHMS(targetSec);
+  const projectionLabel = projection ? secToHMS(projection) : '—';
+  const gap = projection ? Math.round(projection-targetSec) : null;
+  const gapLabel = gap === null ? '' : gap <= 0 ? 'Por debajo del objetivo estimado' : `+${secToHMS(gap)} sobre el objetivo`;
+  const scoreTone = c.score >= 75 ? '#4ade80' : c.score >= 55 ? '#facc15' : '#f87171';
+  return `<div class="backup-card" style="border-color:rgba(255,204,0,.28);">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+      <div><div class="eyebrow" style="margin-bottom:3px;">Coach Runner</div><div style="font-size:12px;color:rgba(255,255,255,.55);">Análisis automático de tus datos</div></div>
+      <button data-goal-settings="1" style="font-size:11px;color:rgba(255,255,255,.45);text-decoration:underline;">Objetivos</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px;margin-top:14px;">
+      <div style="width:70px;height:70px;border-radius:50%;border:6px solid ${scoreTone};display:flex;align-items:center;justify-content:center;flex:none;"><span class="font-display" style="font-size:24px;color:${scoreTone};">${c.score}</span></div>
+      <div><div style="font-size:15px;font-weight:800;color:${scoreTone};">${c.score>=75?'Preparación sólida':c.score>=55?'En progreso':'Necesita atención'}</div><div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:3px;">Carga: ${c.load.status}</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px;">
+      <div class="stat-card"><div class="val font-display">${c.weekKm} km</div><div class="lbl">Esta semana</div></div>
+      <div class="stat-card"><div class="val font-display">${c.load.acwr ?? '—'}</div><div class="lbl">Carga 7d / 28d</div></div>
+      <div class="stat-card"><div class="val font-display">${projectionLabel}</div><div class="lbl">Proyección maratón</div></div>
+      <div class="stat-card"><div class="val font-display">${targetLabel}</div><div class="lbl">Objetivo maratón</div></div>
+    </div>
+    ${gapLabel ? `<div style="font-size:11px;color:${gap<=0?'#4ade80':'#facc15'};margin-top:9px;">${gapLabel}</div>` : ''}
+    <div style="margin-top:12px;">${c.recommendations.map((r,i)=>`<div style="font-size:12px;color:rgba(255,255,255,.72);line-height:1.5;margin-top:${i?'7px':'0'};">• ${escapeHtml(r)}</div>`).join('')}</div>
+  </div>`;
+}
+
+function renderWeeklyEvolutionCard() {
+  const rows=[];
+  const idx=currentWeekIndex();
+  for(let i=Math.max(0,idx-3);i<=Math.min(PLAN.length-1,idx);i++) {
+    const w=PLAN[i], km=weekRealKm(w), target=parseFloat(w.badge)||0;
+    rows.push(`<div style="margin-top:9px;"><div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(255,255,255,.6);"><span>Sem ${w.week}</span><span>${km.toFixed(1)} / ${target||'—'} km</span></div><div style="height:6px;background:rgba(255,255,255,.08);border-radius:99px;overflow:hidden;margin-top:4px;"><div style="height:100%;width:${target?Math.min(100,(km/target)*100):0}%;background:#FFCC00;"></div></div></div>`);
+  }
+  return `<div class="backup-card"><div class="eyebrow">Evolución semanal</div>${rows.join('')}</div>`;
+}
+
+function openGoalSettingsModal() {
+  const root=document.getElementById('modalRoot');
+  const targetWeight=S.weightSettings.targetWeight ?? '';
+  const targetSec=S.goals?.marathonTargetSec || 15300;
+  root.innerHTML=`<div class="modal-overlay" data-modal-overlay="1"><div class="modal-sheet"><div class="modal-head"><div class="t font-display">Objetivos Runner</div><button class="modal-close" data-modal-close="1">${icon('x',18)}</button></div><div class="modal-desc">Configura los objetivos que usa Coach Runner. Son metas, no recomendaciones médicas.</div><div class="gh-label">Tiempo objetivo de maratón</div><input id="goalMarathonInput" class="gh-input" value="${secToHMS(targetSec)}" placeholder="4:15:00"><div class="gh-label">Peso objetivo (opcional)</div><input id="goalWeightInput" type="number" step="0.1" min="30" max="300" class="gh-input" value="${targetWeight}" placeholder="80"><button class="modal-btn" data-goal-save="1">Guardar objetivos</button></div></div>`;
+}
+
+function parseHMSInput(value) {
+  const parts=String(value).trim().split(':').map(Number);
+  if(parts.length===3 && parts.every(Number.isFinite)) return parts[0]*3600+parts[1]*60+parts[2];
+  if(parts.length===2 && parts.every(Number.isFinite)) return parts[0]*60+parts[1];
+  return null;
+}
+
+
+function getTodayPlannedSession() {
+  const w = PLAN.find(w => today >= w.start && today <= w.end);
+  if (!w) return null;
+  const items = [[1,w.day1Date,w.day1],[2,w.day2Date,w.day2],[3,w.day3Date,w.day3]];
+  const hit = items.find(([idx,d]) => fmt(d) === fmt(today));
+  return hit ? { week:w, dayIdx:hit[0], date:hit[1], text:hit[2], key:`${w.week}-${hit[0]}` } : null;
+}
+
+function renderTodayCard() {
+  const planned = getTodayPlannedSession();
+  const todayRuns = Object.values(S.activities).filter(a => ['Run','TrailRun'].includes(a.sportType) && a.date === fmt(today)).sort((a,b)=>String(a.startLocal).localeCompare(String(b.startLocal)));
+  if (!planned && !todayRuns.length) return '';
+  const done = planned ? !!S.sessionsDone[planned.key] : false;
+  return `<div class="backup-card" style="border-color:rgba(255,204,0,.32);">
+    <div class="eyebrow">Hoy</div>
+    ${planned ? `<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-top:6px;"><div><div style="font-size:15px;font-weight:800;">${escapeHtml(planned.text)}</div><div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:4px;">Semana ${planned.week.week} · ${planned.week.phase}</div></div><span style="font-size:10px;padding:4px 7px;border-radius:999px;background:${done?'rgba(74,222,128,.12)':'rgba(255,204,0,.12)'};color:${done?'#4ade80':'#FFCC00'};">${done?'COMPLETADO':'PLAN'}</span></div>` : ''}
+    ${todayRuns.length ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,.08);">${todayRuns.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;"><div><div style="font-size:12px;font-weight:700;">${escapeHtml(a.name)}</div><div style="font-size:10px;color:rgba(255,255,255,.45);">${a.distanceKm} km · ${a.paceStr}${a.avgHr?` · ${Math.round(a.avgHr)} ppm`:''}</div></div>${a.pendingSessionKey && !S.sessionsDone[a.pendingSessionKey] ? `<button class="mini-btn" data-associate-session="${escapeHtml(a.pendingSessionKey)}" data-associate-activity="${escapeHtml(String(a.id))}">Asociar</button>` : `<span style="font-size:10px;color:#4ade80;">✓</span>`}</div>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+
+function renderPaceHrCard() {
+  const t = computePaceHrTrend();
+  if (!t || !t.rows.length) return '';
+  const first=t.rows[0], last=t.rows[t.rows.length-1];
+  const paceFirst=first.paceStr, paceLast=last.paceStr;
+  const tone=t.change>2?'#4ade80':t.change<-2?'#facc15':'rgba(255,255,255,.65)';
+  return `<div class="backup-card" style="border-color:rgba(192,132,252,.22);"><div class="eyebrow" style="color:#c084fc;">Ritmo + frecuencia cardiaca</div><div style="font-size:11px;color:rgba(255,255,255,.48);margin-top:3px;">Comparación de tus últimos ${t.rows.length} rodajes con FC disponible.</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;"><div class="stat-card"><div class="val font-display">${paceFirst}</div><div class="lbl">Primer registro</div></div><div class="stat-card"><div class="val font-display">${paceLast}</div><div class="lbl">Más reciente</div></div><div class="stat-card"><div class="val font-display">${Math.round(first.avgHr)} ppm</div><div class="lbl">FC inicial</div></div><div class="stat-card"><div class="val font-display">${Math.round(last.avgHr)} ppm</div><div class="lbl">FC reciente</div></div></div><div style="font-size:11px;color:${tone};font-weight:700;margin-top:10px;">EF reciente: ${t.change>=0?'+':''}${t.change}%</div><div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:4px;line-height:1.45;">Una mejora de EF sugiere mejor relación entre velocidad y esfuerzo cardiaco, pero debe compararse en esfuerzos parecidos.</div></div>`;
+}
+
 function renderHome() {
   const daysToRace = Math.max(0, Math.round((RACE_DATE - today) / DAY_MS));
   const daysRunCount = S.runDays.length;
@@ -855,6 +1071,8 @@ function renderHome() {
         <div class="h-date">Maratón · ${fmtShort(RACE_DATE)} ${RACE_DATE.getFullYear()}</div>
         <img src="${RUNNER_SILHOUETTE_SRC}" class="runner-ghost" alt="">
       </div>
+
+      ${renderTodayCard()}
 
       <div class="section">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -900,6 +1118,9 @@ function renderHome() {
         <div class="cta">Toca para ver los 3 entrenamientos de esta semana →</div>
       </button>
 
+      ${renderCoachCard()}
+      ${renderWeeklyEvolutionCard()}
+      ${renderPaceHrCard()}
       ${renderTrainingStatusCard()}
       ${renderShoeCard()}
       ${renderRecentActivities()}
@@ -938,6 +1159,7 @@ function renderShoeCard() {
         <div style="width:${pct}%;height:100%;background:${color};"></div>
       </div>
       <div style="font-size:11px;color:${color};margin-top:8px;font-weight:600;">${label}</div>
+      ${(S.shoes.history||[]).length ? `<div style="margin-top:10px;font-size:10px;color:rgba(255,255,255,.38);">Pares anteriores: ${(S.shoes.history||[]).length}</div>` : ''}
     </div>
   `;
 }
@@ -973,9 +1195,18 @@ function saveShoeSettings() {
   const name = document.getElementById('shoeNameInput').value.trim();
   const start = document.getElementById('shoeStartInput').value;
   const threshold = parseFloat(document.getElementById('shoeThresholdInput').value);
-  S.shoes.name = name || 'Tenis';
-  S.shoes.startDate = start || fmt(today);
-  S.shoes.thresholdKm = threshold > 0 ? threshold : 550;
+  const old = { name:S.shoes.name, startDate:S.shoes.startDate, thresholdKm:S.shoes.thresholdKm };
+  const nextName = name || 'Tenis';
+  const nextStart = start || fmt(today);
+  const nextThreshold = threshold > 0 ? threshold : 550;
+  if (S.shoes.name && (old.name !== nextName || old.startDate !== nextStart) && shoeKmUsed() > 0) {
+    S.shoes.history = Array.isArray(S.shoes.history) ? S.shoes.history : [];
+    S.shoes.history.unshift({ ...old, retiredDate:fmt(today), usedKm:+shoeKmUsed().toFixed(1) });
+    S.shoes.history = S.shoes.history.slice(0,10);
+  }
+  S.shoes.name = nextName;
+  S.shoes.startDate = nextStart;
+  S.shoes.thresholdKm = nextThreshold;
   persist();
   document.getElementById('modalRoot').innerHTML = '';
   showToast('Tenis actualizados ✅');
@@ -1128,6 +1359,7 @@ function renderGoogleDriveCard() {
         <button data-gdrive-restore="1" style="font-size:11px;color:rgba(255,255,255,0.4);text-decoration:underline;" ${gd.syncing ? 'disabled' : ''}>Restaurar último respaldo</button>
         <button data-backup="copy" style="font-size:11px;color:rgba(255,255,255,0.4);text-decoration:underline;">Exportar manual</button>
         <button data-backup="paste" style="font-size:11px;color:rgba(255,255,255,0.4);text-decoration:underline;">Importar manual</button>
+        ${hasPreRestoreSnapshot() ? `<button data-undo-restore="1" style="font-size:11px;color:#facc15;text-decoration:underline;">Deshacer última restauración</button>` : ''}
       </div>
     </div>
   `;
@@ -1893,11 +2125,19 @@ function renderPeso() {
     .map(([date, weight]) => ({ date, weight: parseFloat(weight) }));
   const lastWeight = chartData.length ? chartData[chartData.length-1].weight : startWeight;
   const delta = +(lastWeight - startWeight).toFixed(1);
+  const targetWeight = S.weightSettings.targetWeight;
   let weeklyTrend = null;
   if (chartData.length >= 3) {
     const first = chartData[0], last = chartData[chartData.length - 1];
     const days = Math.max(1, (new Date(last.date) - new Date(first.date)) / DAY_MS);
     weeklyTrend = +(((last.weight - first.weight) / days) * 7).toFixed(2);
+  }
+
+  let weightProjection = null;
+  if (weeklyTrend !== null && targetWeight && weeklyTrend < 0 && lastWeight > targetWeight) {
+    const weeks = (lastWeight - targetWeight) / Math.abs(weeklyTrend);
+    const projected = new Date(today.getTime() + weeks * 7 * DAY_MS);
+    weightProjection = `A esta tendencia, llegarías aproximadamente a ${targetWeight} kg en ${fmtShort(projected)}.`;
   }
 
   const monthName = MONTHS_ES[today.getMonth()];
@@ -1938,6 +2178,7 @@ function renderPeso() {
         <div class="peso-stat"><div class="l">Actual</div><div class="v font-display" style="color:#FFCC00;">${lastWeight}</div><div class="u">kg</div></div>
         <div class="peso-stat"><div class="l">Cambio</div><div class="v font-display" style="color:${delta<=0?'#4ade80':'#f87171'};">${delta > 0 ? '+' : ''}${delta}</div><div class="u">kg</div></div>
       </div>
+      ${targetWeight ? `<div class="card" style="margin-top:12px;"><div class="eyebrow">Objetivo</div><div style="font-size:15px;font-weight:800;">${targetWeight} kg · faltan ${Math.max(0,lastWeight-targetWeight).toFixed(1)} kg</div>${weightProjection?`<div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:5px;">${weightProjection}</div>`:''}</div>`:''}
       ${weeklyTrend !== null ? `<div class="card" style="margin-top:12px;"><div class="eyebrow">Tendencia</div><div style="font-size:15px;font-weight:700;color:${weeklyTrend <= 0 ? '#4ade80' : '#f87171'};">${weeklyTrend > 0 ? '+' : ''}${weeklyTrend} kg/semana</div><div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:4px;">Calculada con tus pesajes registrados.</div></div>` : ''}
 
       ${chartData.length >= 2 ? `<div class="chart-card"><canvas id="weightCanvas" style="width:100%;height:100%;"></canvas></div>` : ''}
@@ -1962,6 +2203,8 @@ function openWeightSettingsModal() {
         <div class="modal-desc">Este es el peso base contra el que se compara tu "cambio" en Inicio y en Peso. Cámbialo si no era correcto.</div>
         <div class="gh-label">Peso inicial (kg)</div>
         <input type="number" step="0.1" min="30" max="300" id="startWeightInput" class="gh-input" value="${S.weightSettings.startWeight}">
+        <div class="gh-label">Peso objetivo (kg, opcional)</div>
+        <input type="number" step="0.1" min="30" max="300" id="targetWeightInput" class="gh-input" value="${S.weightSettings.targetWeight ?? ''}" placeholder="Ej. 80">
         <button class="modal-btn" data-weightsettings-save="1">Guardar</button>
       </div>
     </div>
@@ -1970,7 +2213,9 @@ function openWeightSettingsModal() {
 
 function saveWeightSettings() {
   const val = parseFloat(document.getElementById('startWeightInput').value);
+  const target = parseFloat(document.getElementById('targetWeightInput')?.value);
   if (val > 0) S.weightSettings.startWeight = val;
+  S.weightSettings.targetWeight = target > 0 ? target : null;
   persist();
   document.getElementById('modalRoot').innerHTML = '';
   showToast('Peso inicial actualizado ✅');
@@ -2043,13 +2288,33 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 }
 
+
+const PRE_RESTORE_KEY = 'runner-pre-restore-backup-v1';
+function savePreRestoreSnapshot() {
+  try { localStorage.setItem(PRE_RESTORE_KEY, JSON.stringify(backupPayloadObject())); } catch (_) {}
+}
+function hasPreRestoreSnapshot() {
+  try { return !!localStorage.getItem(PRE_RESTORE_KEY); } catch (_) { return false; }
+}
+function undoLastRestore() {
+  try {
+    const raw=localStorage.getItem(PRE_RESTORE_KEY);
+    if (!raw) { showToast('No hay una restauración para deshacer'); return; }
+    const parsed=JSON.parse(raw);
+    savePreRestoreSnapshot();
+    applyRestoredData(parsed);
+    localStorage.removeItem(PRE_RESTORE_KEY);
+    persist(); render(); showToast('Restauración deshecha ✅');
+  } catch (_) { showToast('No se pudo deshacer la restauración'); }
+}
+
 function backupPayloadObject() {
   return {
-    backupVersion: 2,
+    backupVersion: 3,
     app: 'Runner',
     exportedAt: new Date().toISOString(),
     runDays: S.runDays, weighIns: S.weighIns, sessionsDone: S.sessionsDone,
-    activities: S.activities, shoes: S.shoes, weightSettings: S.weightSettings,
+    activities: S.activities, shoes: S.shoes, weightSettings: S.weightSettings, goals: S.goals,
     races: S.races,
   };
 }
@@ -2063,6 +2328,7 @@ function applyRestoredData(parsed) {
   if (parsed.activities && typeof parsed.activities === 'object' && !Array.isArray(parsed.activities)) S.activities = { ...parsed.activities };
   if (parsed.shoes && typeof parsed.shoes === 'object' && !Array.isArray(parsed.shoes)) S.shoes = { ...S.shoes, ...parsed.shoes };
   if (parsed.weightSettings && typeof parsed.weightSettings === 'object' && !Array.isArray(parsed.weightSettings)) S.weightSettings = { ...S.weightSettings, ...parsed.weightSettings };
+  if (parsed.goals && typeof parsed.goals === 'object' && !Array.isArray(parsed.goals)) S.goals = { ...S.goals, ...parsed.goals };
   if (Array.isArray(parsed.races)) S.races = parsed.races;
 }
 
@@ -2201,6 +2467,7 @@ async function restoreFromGoogleDrive() {
     });
     if (!res.ok) throw new Error('No se pudo descargar el respaldo');
     const data = await res.json();
+    savePreRestoreSnapshot();
     applyRestoredData(data);
 
     S.googleDrive.fileId = fileId;
@@ -2389,6 +2656,7 @@ function openBackupModal(mode) {
 function restoreBackup(text) {
   try {
     const parsed = JSON.parse(text);
+    savePreRestoreSnapshot();
     applyRestoredData(parsed);
     persist();
     document.getElementById('modalRoot').innerHTML = '';
@@ -2496,6 +2764,24 @@ document.addEventListener('click', (e) => {
   const stravaConnectBtn = e.target.closest('[data-strava-connect]');
   if (stravaConnectBtn) { window.location.href = stravaAuthUrl(); return; }
 
+  const associateBtn = e.target.closest('[data-associate-session]');
+  if (associateBtn) {
+    const key = associateBtn.dataset.associateSession;
+    if (key) { S.sessionsDone[key] = true; const id=associateBtn.dataset.associateActivity; if (S.activities[id]) delete S.activities[id].pendingSessionKey; persist(); render(); showToast('Entrenamiento asociado al plan ✅'); }
+    return;
+  }
+
+  const goalSettingsBtn = e.target.closest('[data-goal-settings]');
+  if (goalSettingsBtn) { openGoalSettingsModal(); return; }
+
+  const goalSaveBtn = e.target.closest('[data-goal-save]');
+  if (goalSaveBtn) {
+    const sec=parseHMSInput(document.getElementById('goalMarathonInput')?.value);
+    const weight=parseFloat(document.getElementById('goalWeightInput')?.value);
+    if (!sec || sec < 2*3600 || sec > 8*3600) { showToast('Tiempo objetivo inválido'); return; }
+    S.goals=S.goals||{}; S.goals.marathonTargetSec=sec; S.weightSettings.targetWeight=weight>0?weight:null; persist(); document.getElementById('modalRoot').innerHTML=''; render(); showToast('Objetivos guardados ✅'); return;
+  }
+
   const stravaSyncBtn = e.target.closest('[data-strava-sync]');
   if (stravaSyncBtn) { syncStravaActivities(false); return; }
 
@@ -2507,6 +2793,9 @@ document.addEventListener('click', (e) => {
 
   const gdriveRestoreBtn = e.target.closest('[data-gdrive-restore]');
   if (gdriveRestoreBtn) { restoreFromGoogleDrive(); return; }
+
+  const undoRestoreBtn = e.target.closest('[data-undo-restore]');
+  if (undoRestoreBtn) { if (window.confirm('Esto devolverá los datos que tenías antes de la última restauración. ¿Continuar?')) undoLastRestore(); return; }
 
   const openUpdateBtn = e.target.closest('[data-open-update]');
   if (openUpdateBtn) { openConnectionsModal(); return; }
