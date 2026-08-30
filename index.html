@@ -2226,13 +2226,35 @@ function renderPeso() {
         </div>
       </div>
 
-      <div class="peso-stats" style="margin-top:16px;">
-        <div class="peso-stat"><div class="l">Inicial <button data-weightsettings-edit="1" style="font-size:9px;color:rgba(255,255,255,0.4);text-decoration:underline;">editar</button></div><div class="v font-display">${startWeight}</div><div class="u">kg</div></div>
-        <div class="peso-stat"><div class="l">Actual</div><div class="v font-display" style="color:#FFCC00;">${lastWeight}</div><div class="u">kg</div></div>
-        <div class="peso-stat"><div class="l">Cambio</div><div class="v font-display" style="color:${delta<=0?'#4ade80':'#f87171'};">${delta > 0 ? '+' : ''}${delta}</div><div class="u">kg</div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px;">
+        <div style="background:#151515;border-radius:14px;padding:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:10px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.06em;">Inicial</span>
+            <button data-weightsettings-edit="1" style="font-size:9px;color:rgba(255,255,255,.4);text-decoration:underline;flex-shrink:0;">editar</button>
+          </div>
+          <div class="font-display" style="font-size:24px;margin-top:5px;">${startWeight}<span style="font-size:12px;color:rgba(255,255,255,.4);"> kg</span></div>
+        </div>
+        <div style="background:#151515;border-radius:14px;padding:14px;">
+          <span style="font-size:10px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.06em;">Actual</span>
+          <div class="font-display" style="font-size:24px;margin-top:5px;color:#FFCC00;">${lastWeight}<span style="font-size:12px;color:rgba(255,255,255,.4);"> kg</span></div>
+        </div>
+        <div style="background:#151515;border-radius:14px;padding:14px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="color:${delta<=0?'#4ade80':'#f87171'};display:flex;">${icon(delta<=0?'trendDown':'trendUp',12)}</span>
+            <span style="font-size:10px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.06em;">Cambio</span>
+          </div>
+          <div class="font-display" style="font-size:24px;margin-top:5px;color:${delta<=0?'#4ade80':'#f87171'};">${delta > 0 ? '+' : ''}${delta}<span style="font-size:12px;color:rgba(255,255,255,.4);"> kg</span></div>
+        </div>
+        <div style="background:#151515;border-radius:14px;padding:14px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="color:${weeklyTrend===null?'rgba(255,255,255,.3)':weeklyTrend<=0?'#4ade80':'#f87171'};display:flex;">${icon(weeklyTrend!==null && weeklyTrend>0?'trendUp':'trendDown',12)}</span>
+            <span style="font-size:10px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.06em;">Tendencia</span>
+          </div>
+          <div class="font-display" style="font-size:24px;margin-top:5px;color:${weeklyTrend===null?'rgba(255,255,255,.3)':weeklyTrend<=0?'#4ade80':'#f87171'};">${weeklyTrend===null?'—':(weeklyTrend>0?'+':'')+weeklyTrend}<span style="font-size:11px;color:rgba(255,255,255,.4);"> kg/sem</span></div>
+          ${weeklyTrend !== null && !weeklyTrendReliable ? `<div style="font-size:9px;color:rgba(255,255,255,.35);margin-top:3px;">preliminar, con ${chartData.length}</div>` : ''}
+        </div>
       </div>
       ${targetWeight ? `<div class="card" style="margin-top:12px;"><div class="eyebrow">Objetivo</div><div style="font-size:15px;font-weight:800;">${targetWeight} kg · faltan ${Math.max(0,lastWeight-targetWeight).toFixed(1)} kg</div>${weightProjection?`<div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:5px;">${weightProjection}</div>`:''}</div>`:''}
-      ${weeklyTrend !== null ? `<div class="card" style="margin-top:12px;"><div class="eyebrow">Tendencia</div><div style="font-size:15px;font-weight:700;color:${weeklyTrend <= 0 ? '#4ade80' : '#f87171'};">${weeklyTrend > 0 ? '+' : ''}${weeklyTrend} kg/semana</div><div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:4px;">${weeklyTrendReliable ? 'Calculada con tus pesajes registrados.' : `Con solo ${chartData.length} pesajes todavía es un cálculo muy preliminar — se vuelve confiable a partir de 4.`}</div></div>` : ''}
 
       ${chartData.length >= 2 ? `<div class="chart-card"><canvas id="weightCanvas" style="width:100%;height:100%;"></canvas></div>` : ''}
 
