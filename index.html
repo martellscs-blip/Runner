@@ -1093,14 +1093,26 @@ function renderCoachCard() {
 }
 
 function weekLongRunReal(week) {
-  // La tirada larga es una sesión; si hay varias actividades el mismo domingo,
-  // tomamos la de mayor distancia y leemos su duración — así km y minutos
-  // siempre vienen de la MISMA actividad, nunca de dos sesiones distintas.
-  const sameDay = Object.values(S.activities)
-    .filter(a => ['Run','TrailRun'].includes(a.sportType))
-    .filter(a => { const d = new Date(a.date + 'T00:00:00'); return fmt(d) === fmt(week.day3Date) && d <= today; });
-  if (!sameDay.length) return { km: 0, minutes: 0 };
-  const best = sameDay.reduce((max, a) => (Number(a.distanceKm) || 0) > (Number(max.distanceKm) || 0) ? a : max, sameDay[0]);
+  // La tirada larga no siempre cae justo el domingo asignado — viajes, reposición
+  // de días, etc. Buscamos así, en orden:
+  // 1) Si esa sesión se repuso corriendo en otra fecha real, usamos esa carrera exacta.
+  // 2) Si no, tomamos la carrera más larga dentro de la semana completa del plan
+  //    (sin exigir que sea justo el domingo).
+  const day3Key = `${week.week}-3`;
+  const madeUp = S.madeUpSessions ? S.madeUpSessions[day3Key] : null;
+  const runs = Object.values(S.activities).filter(a => ['Run','TrailRun'].includes(a.sportType));
+
+  let candidates;
+  if (madeUp && S.sessionsDone[day3Key]) {
+    candidates = runs.filter(a => a.date === madeUp.date);
+  } else {
+    candidates = runs.filter(a => {
+      const d = new Date(a.date + 'T00:00:00');
+      return d >= week.start && d <= week.end && d <= today;
+    });
+  }
+  if (!candidates.length) return { km: 0, minutes: 0 };
+  const best = candidates.reduce((max, a) => (Number(a.distanceKm) || 0) > (Number(max.distanceKm) || 0) ? a : max, candidates[0]);
   return { km: Number(best.distanceKm) || 0, minutes: (Number(best.movingTimeSec) || 0) / 60 };
 }
 
@@ -2281,13 +2293,17 @@ function renderPeso() {
   const delta = +(lastWeight - startWeight).toFixed(1);
   const targetWeight = S.weightSettings.targetWeight;
   let weeklyTrend = null;
-  if (chartData.length >= 3) {
+  let weeklyTrendReliable = false;
+  if (chartData.length >= 2) {
     // Regresión lineal sobre TODOS los pesajes (no solo el primero y el último) —
     // un solo día raro (retención de líquidos, comida pesada) no distorsiona el resultado.
+    // Con 2 puntos es matemáticamente solo la línea entre ellos; con 4+ ya es una
+    // tendencia real que vale más la pena confiar.
     const t0 = new Date(chartData[0].date).getTime();
     const points = chartData.map(d => ({ x: (new Date(d.date).getTime() - t0) / DAY_MS, y: d.weight }));
     const trend = linearRegression(points);
     if (trend) weeklyTrend = +(trend.slope * 7).toFixed(2);
+    weeklyTrendReliable = chartData.length >= 4;
   }
 
   let weightProjection = null;
@@ -2336,7 +2352,7 @@ function renderPeso() {
         <div class="peso-stat"><div class="l">Cambio</div><div class="v font-display" style="color:${delta<=0?'#4ade80':'#f87171'};">${delta > 0 ? '+' : ''}${delta}</div><div class="u">kg</div></div>
       </div>
       ${targetWeight ? `<div class="card" style="margin-top:12px;"><div class="eyebrow">Objetivo</div><div style="font-size:15px;font-weight:800;">${targetWeight} kg · faltan ${Math.max(0,lastWeight-targetWeight).toFixed(1)} kg</div>${weightProjection?`<div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:5px;">${weightProjection}</div>`:''}</div>`:''}
-      ${weeklyTrend !== null ? `<div class="card" style="margin-top:12px;"><div class="eyebrow">Tendencia</div><div style="font-size:15px;font-weight:700;color:${weeklyTrend <= 0 ? '#4ade80' : '#f87171'};">${weeklyTrend > 0 ? '+' : ''}${weeklyTrend} kg/semana</div><div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:4px;">Calculada con tus pesajes registrados.</div></div>` : ''}
+      ${weeklyTrend !== null ? `<div class="card" style="margin-top:12px;"><div class="eyebrow">Tendencia</div><div style="font-size:15px;font-weight:700;color:${weeklyTrend <= 0 ? '#4ade80' : '#f87171'};">${weeklyTrend > 0 ? '+' : ''}${weeklyTrend} kg/semana</div><div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:4px;">${weeklyTrendReliable ? 'Calculada con tus pesajes registrados.' : `Con solo ${chartData.length} pesajes todavía es un cálculo muy preliminar — se vuelve confiable a partir de 4.`}</div></div>` : ''}
 
       ${chartData.length >= 2 ? `<div class="chart-card"><canvas id="weightCanvas" style="width:100%;height:100%;"></canvas></div>` : ''}
 
@@ -2391,15 +2407,25 @@ function drawWeightChart(data, startWeight) {
   const w = rect.width, h = rect.height;
   const pad = { top: 10, right: 10, bottom: 20, left: 34 };
   const weights = data.map(d => d.weight);
-  const min = Math.min(...weights, startWeight) - 1;
-  const max = Math.max(...weights, startWeight) + 1;
+  // El rango del eje se calcula SOLO con tus pesajes reales (con un margen chico),
+  // no forzando siempre a incluir el peso inicial — si ese número queda lejos de
+  // tus registros recientes, obligar a incluirlo aplastaría visualmente cualquier
+  // cambio real que sí hayas tenido.
+  const dataMin = Math.min(...weights);
+  const dataMax = Math.max(...weights);
+  const span = Math.max(dataMax - dataMin, 0.5);
+  const pad_ = Math.max(0.5, span * 0.25);
+  const min = dataMin - pad_;
+  const max = dataMax + pad_;
+  const showStartRef = startWeight >= min && startWeight <= max;
   const xStep = (w - pad.left - pad.right) / Math.max(1, data.length - 1);
   const yFor = (val) => h - pad.bottom - ((val - min) / (max - min)) * (h - pad.top - pad.bottom);
   const xFor = (i) => pad.left + i * xStep;
 
   ctx.clearRect(0, 0, w, h);
 
-  // reference line at start weight
+  // línea de referencia del peso inicial, solo si cae dentro del rango visible
+  if (showStartRef) {
   ctx.strokeStyle = 'rgba(255,255,255,0.2)';
   ctx.setLineDash([4,4]);
   ctx.beginPath();
@@ -2407,6 +2433,7 @@ function drawWeightChart(data, startWeight) {
   ctx.lineTo(w - pad.right, yFor(startWeight));
   ctx.stroke();
   ctx.setLineDash([]);
+  }
 
   // y labels
   ctx.fillStyle = 'rgba(255,255,255,0.4)';
