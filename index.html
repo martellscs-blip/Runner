@@ -362,17 +362,6 @@ function raceLabelForDistance(km) {
   return b ? b.label : `${km} km`;
 }
 
-const WEIGH_DAYS = (() => {
-  const out = [];
-  let d = new Date(PLAN_START);
-  while (d <= RACE_DATE) {
-    const dow = d.getDay();
-    if (dow === 1) out.push(new Date(d));
-    d = addDays(d, 1);
-  }
-  return out;
-})();
-
 const MONTHS_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 const DOW_ES = ["L","M","X","J","V","S","D"];
 
@@ -809,7 +798,6 @@ let showTipsText = false;
 let showCoachRecs = false;
 let showCadenceTips = false;
 let showHrTips = false;
-let showBackfillWeigh = false;
 function showToast(msg) {
   const root = document.getElementById('toastRoot');
   root.innerHTML = `<div class="toast">${msg}</div>`;
@@ -2210,8 +2198,6 @@ function renderPeso() {
     </div>
   `).join('');
 
-  setTimeout(() => drawWeightChart(chartData, startWeight), 0);
-
   return `
     <div class="px5 section">
       <div class="eyebrow">Control de peso</div>
@@ -2256,22 +2242,7 @@ function renderPeso() {
       </div>
       ${targetWeight ? `<div class="card" style="margin-top:12px;"><div class="eyebrow">Objetivo</div><div style="font-size:15px;font-weight:800;">${targetWeight} kg · faltan ${Math.max(0,lastWeight-targetWeight).toFixed(1)} kg</div>${weightProjection?`<div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:5px;">${weightProjection}</div>`:''}</div>`:''}
 
-      ${chartData.length >= 2 ? `<div class="chart-card"><canvas id="weightCanvas" style="width:100%;height:100%;"></canvas></div>` : ''}
-
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;margin-bottom:4px;">
-        <div class="eyebrow" style="margin-bottom:0;">Tu historial</div>
-        <button data-toggle-backfill-weigh="1" style="font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;">${showBackfillWeigh ? 'Cancelar' : '+ Agregar día anterior'}</button>
-      </div>
-
-      ${showBackfillWeigh ? `
-      <div class="card" style="margin-bottom:12px;">
-        <div class="gh-label" style="margin-top:0;">Fecha</div>
-        <input type="date" id="backfillDateInput" class="gh-input" value="${todayStr}" max="${todayStr}">
-        <div class="gh-label">Peso</div>
-        <input type="number" step="0.1" min="30" max="300" id="backfillWeightInput" class="gh-input" placeholder="Ej. 89.2">
-        <button class="modal-btn" data-backfill-weigh-save="1" style="margin-top:12px;">Guardar</button>
-      </div>
-      ` : ''}
+      <div class="eyebrow" style="margin-top:16px;margin-bottom:4px;">Tu historial</div>
 
       <div>
         ${historyRows || `<div style="font-size:12px;color:rgba(255,255,255,0.4);text-align:center;padding:20px 0;">Todavía no tienes pesajes registrados — usa el campo de arriba para empezar.</div>`}
@@ -2311,77 +2282,6 @@ function saveWeightSettings() {
   render();
 }
 
-function drawWeightChart(data, startWeight) {
-  const canvas = document.getElementById('weightCanvas');
-  if (!canvas) return;
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  const w = rect.width, h = rect.height;
-  const pad = { top: 10, right: 10, bottom: 20, left: 34 };
-  const weights = data.map(d => d.weight);
-  // El rango del eje se calcula SOLO con tus pesajes reales (con un margen chico),
-  // no forzando siempre a incluir el peso inicial — si ese número queda lejos de
-  // tus registros recientes, obligar a incluirlo aplastaría visualmente cualquier
-  // cambio real que sí hayas tenido.
-  const dataMin = Math.min(...weights);
-  const dataMax = Math.max(...weights);
-  const span = Math.max(dataMax - dataMin, 0.5);
-  const pad_ = Math.max(0.5, span * 0.25);
-  const min = dataMin - pad_;
-  const max = dataMax + pad_;
-  const showStartRef = startWeight >= min && startWeight <= max;
-  const xStep = (w - pad.left - pad.right) / Math.max(1, data.length - 1);
-  const yFor = (val) => h - pad.bottom - ((val - min) / (max - min)) * (h - pad.top - pad.bottom);
-  const xFor = (i) => pad.left + i * xStep;
-
-  ctx.clearRect(0, 0, w, h);
-
-  // línea de referencia del peso inicial, solo si cae dentro del rango visible
-  if (showStartRef) {
-  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-  ctx.setLineDash([4,4]);
-  ctx.beginPath();
-  ctx.moveTo(pad.left, yFor(startWeight));
-  ctx.lineTo(w - pad.right, yFor(startWeight));
-  ctx.stroke();
-  ctx.setLineDash([]);
-  }
-
-  // y labels
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.font = '10px Inter, sans-serif';
-  ctx.textAlign = 'right';
-  ctx.fillText(max.toFixed(0), pad.left - 6, yFor(max) + 4);
-  ctx.fillText(min.toFixed(0), pad.left - 6, yFor(min) + 4);
-
-  // line
-  ctx.strokeStyle = '#FFCC00';
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  data.forEach((d, i) => {
-    const x = xFor(i), y = yFor(d.weight);
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-
-  // dots + x labels
-  ctx.textAlign = 'center';
-  data.forEach((d, i) => {
-    const x = xFor(i), y = yFor(d.weight);
-    ctx.fillStyle = '#FFCC00';
-    ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
-    ctx.fill();
-    if (i === 0 || i === data.length - 1 || data.length <= 5) {
-      ctx.fillStyle = 'rgba(255,255,255,0.4)';
-      ctx.fillText(fmtShort(new Date(d.date + 'T00:00:00')), x, h - 4);
-    }
-  });
-}
 
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
@@ -2816,26 +2716,6 @@ document.addEventListener('click', (e) => {
 
   const toggleHrTips = e.target.closest('[data-toggle-hr-tips]');
   if (toggleHrTips) { showHrTips = !showHrTips; render(); return; }
-
-  const toggleBackfillWeigh = e.target.closest('[data-toggle-backfill-weigh]');
-  if (toggleBackfillWeigh) { showBackfillWeigh = !showBackfillWeigh; render(); return; }
-
-  const backfillWeighSave = e.target.closest('[data-backfill-weigh-save]');
-  if (backfillWeighSave) {
-    const dateInput = document.getElementById('backfillDateInput');
-    const weightInput = document.getElementById('backfillWeightInput');
-    const date = dateInput ? dateInput.value : '';
-    const val = weightInput ? parseFloat(weightInput.value) : NaN;
-    if (!date) { showToast('Falta la fecha'); return; }
-    if (!val || val <= 0) { showToast('Falta el peso'); return; }
-    if (date > fmt(today)) { showToast('No puedes registrar una fecha futura'); return; }
-    S.weighIns[date] = val;
-    persist();
-    showBackfillWeigh = false;
-    showToast('Pesaje agregado ✅');
-    render();
-    return;
-  }
 
   const chip = e.target.closest('[data-week]');
   if (chip) { S.selectedWeek = parseInt(chip.dataset.week, 10); render(); return; }
