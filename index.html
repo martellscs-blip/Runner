@@ -804,6 +804,7 @@ function currentWeekIndex() {
 }
 
 let toastTimer = null;
+let progressDetailOpen = false;
 function showToast(msg) {
   const root = document.getElementById('toastRoot');
   root.innerHTML = `<div class="toast">${msg}</div>`;
@@ -912,22 +913,6 @@ function formatPaceSeconds(sec) {
   return `${Math.floor(total/60)}:${String(total%60).padStart(2,'0')} /km`;
 }
 
-function renderTrainingStatusCard() {
-  const st = getTrainingStats();
-  if (!st.km28) return '';
-  return `
-    <div class="backup-card" style="border-color:rgba(255,204,0,0.22);">
-      <div class="eyebrow">Estado de entrenamiento</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;">
-        <div class="stat-card"><div class="val font-display">${st.km7} km</div><div class="lbl">Últimos 7 días</div></div>
-        <div class="stat-card"><div class="val font-display">${st.longest7} km</div><div class="lbl">Tirada más larga</div></div>
-        <div class="stat-card"><div class="val font-display">${formatPaceSeconds(st.avgPaceSec)}</div><div class="lbl">Ritmo medio reciente</div></div>
-        <div class="stat-card"><div class="val font-display">${st.consistency}%</div><div class="lbl">Constancia 4 semanas</div></div>
-      </div>
-      <div style="margin-top:10px;font-size:11px;color:${st.loadTone};font-weight:700;">${st.loadStatus}</div>
-    </div>
-  `;
-}
 
 
 function getWeekKmOffset(offset) {
@@ -1089,6 +1074,7 @@ function renderCoachCard() {
     </div>
     ${gapLabel ? `<div style="font-size:11px;color:${gap<=0?'#4ade80':'#facc15'};margin-top:9px;">${gapLabel}</div>` : ''}
     <div style="margin-top:12px;">${c.recommendations.map((r,i)=>`<div style="font-size:12px;color:rgba(255,255,255,.72);line-height:1.5;margin-top:${i?'7px':'0'};">• ${escapeHtml(r)}</div>`).join('')}</div>
+    <button data-goto-plan-detail="1" style="margin-top:12px;font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;">Ver análisis completo →</button>
   </div>`;
 }
 
@@ -1187,16 +1173,6 @@ function renderTodayCard() {
 }
 
 
-function renderPaceHrCard() {
-  const t = computePaceHrTrend();
-  if (!t || !t.rows.length) return '';
-  const first=t.rows[0], last=t.rows[t.rows.length-1];
-  const paceFirst=first.paceStr, paceLast=last.paceStr;
-  const tone=t.change>2?'#4ade80':t.change<-2?'#facc15':'rgba(255,255,255,.65)';
-  const changeLabel = t.reliable ? `EF reciente (tendencia por regresión): ${t.change>=0?'+':''}${t.change}%` : `EF reciente: ${t.change>=0?'+':''}${t.change}% (dato entre solo 2 carreras, aún no es tendencia)`;
-  return `<div class="backup-card" style="border-color:rgba(192,132,252,.22);"><div class="eyebrow" style="color:#c084fc;">Ritmo + frecuencia cardiaca</div><div style="font-size:11px;color:rgba(255,255,255,.48);margin-top:3px;">Comparación de tus últimos ${t.rows.length} rodajes con FC disponible.</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;"><div class="stat-card"><div class="val font-display">${paceFirst}</div><div class="lbl">Primer registro</div></div><div class="stat-card"><div class="val font-display">${paceLast}</div><div class="lbl">Más reciente</div></div><div class="stat-card"><div class="val font-display">${Math.round(first.avgHr)} ppm</div><div class="lbl">FC inicial</div></div><div class="stat-card"><div class="val font-display">${Math.round(last.avgHr)} ppm</div><div class="lbl">FC reciente</div></div></div><div style="font-size:11px;color:${tone};font-weight:700;margin-top:10px;">${changeLabel}</div><div style="font-size:10px;color:rgba(255,255,255,.38);margin-top:4px;line-height:1.45;">Una mejora de EF sugiere mejor relación entre velocidad y esfuerzo cardiaco, pero debe compararse en esfuerzos parecidos.</div></div>`;
-}
-
 function renderHome() {
   const daysToRace = Math.max(0, Math.round((RACE_DATE - today) / DAY_MS));
   const daysRunCount = S.runDays.length;
@@ -1270,9 +1246,6 @@ function renderHome() {
       </button>
 
       ${renderCoachCard()}
-      ${renderWeeklyEvolutionCard()}
-      ${renderPaceHrCard()}
-      ${renderTrainingStatusCard()}
       ${renderShoeCard()}
       ${renderRecentActivities()}
       ${renderRacesCard()}
@@ -1789,7 +1762,7 @@ function renderProgressSection() {
   let cadenceTrend = null;
   if (cadenceData.length >= 2) {
     cadenceTrend = linearRegression(cadenceData.map((d, i) => ({ x: i, y: d.cadence })));
-    setTimeout(() => drawCadenceChart(cadenceData, cadenceTrend), 0);
+    if (progressDetailOpen) setTimeout(() => drawCadenceChart(cadenceData, cadenceTrend), 0);
   }
   let cadenceTrendNote = '';
   if (cadenceTrend && cadenceData.length >= 4) {
@@ -1803,7 +1776,7 @@ function renderProgressSection() {
   let efTrend = null;
   if (efData.length >= 2) {
     efTrend = linearRegression(efData.map((d, i) => ({ x: i, y: d.ef })));
-    setTimeout(() => drawEFChart(efData, efTrend), 0);
+    if (progressDetailOpen) setTimeout(() => drawEFChart(efData, efTrend), 0);
   }
   let efDeltaNote = '';
   if (efTrend && efData.length >= 4) {
@@ -1815,9 +1788,24 @@ function renderProgressSection() {
     efDeltaNote = ` Con solo ${efData.length} carreras que califican todavía no aparece la línea celeste de tendencia — se dibuja sola en cuanto tengas 4 o más.`;
   }
 
+  const trStats = getTrainingStats();
+
+  const summaryBits = [];
+  if (st.compliancePct !== null) summaryBits.push(`Cumplimiento ${st.compliancePct}%`);
+  if (acwrNote) summaryBits.push(`Carga ${acwr.acwr}`);
+  if (efData.length >= 4) summaryBits.push(`EF ${efDeltaNote.includes('+') ? '↑' : efDeltaNote.includes('-') ? '↓' : '→'} tendencia`);
+  const summaryLine = summaryBits.length ? summaryBits.join(' · ') : 'Aún acumulando datos suficientes para un resumen.';
+
   return `
     <div class="card" style="margin-top:20px;">
-      <div class="eyebrow">Tu progreso real (datos de Strava)</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div class="eyebrow" style="margin-bottom:0;">Tu progreso real</div>
+        <button data-toggle-progress-detail="1" style="font-size:11px;color:#FFCC00;font-weight:700;text-decoration:underline;flex-shrink:0;margin-left:8px;">${progressDetailOpen ? 'Ocultar detalle' : 'Ver detalle completo'}</button>
+      </div>
+      <div style="font-size:12px;color:rgba(255,255,255,0.55);margin-top:6px;">${summaryLine}</div>
+
+      ${!progressDetailOpen ? '' : `
+      <div class="dashed-rule" style="margin-top:12px;"></div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0;">
         <div style="background:#151515;border-radius:12px;padding:10px;">
@@ -1838,6 +1826,18 @@ function renderProgressSection() {
         </div>
       </div>
 
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.08em;margin-top:4px;">Últimos 7 días</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:8px 0 12px;">
+        <div style="background:#151515;border-radius:12px;padding:10px;">
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Constancia (4 sem.)</div>
+          <div class="font-display" style="font-size:18px;color:#FFCC00;">${trStats.consistency}%</div>
+        </div>
+        <div style="background:#151515;border-radius:12px;padding:10px;">
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);">Carrera más larga</div>
+          <div class="font-display" style="font-size:18px;color:#FFCC00;">${trStats.longest7} km</div>
+        </div>
+      </div>
+
       <div class="dashed-rule"></div>
 
       <div style="margin-top:12px;">
@@ -1845,6 +1845,8 @@ function renderProgressSection() {
         <div style="font-size:13px;color:rgba(255,255,255,0.75);line-height:1.5;margin-bottom:8px;">${raceProjectionNote}</div>
         ${peakProjection ? `<div style="font-size:13px;color:rgba(255,255,255,0.75);line-height:1.5;">${peakProjection}</div>` : ''}
       </div>
+
+      ${renderWeeklyEvolutionCard()}
 
       ${cadenceData.length >= 2 ? `
       <div class="dashed-rule"></div>
@@ -1892,6 +1894,7 @@ function renderProgressSection() {
           <li>Sigue combinando fuerza 2x/semana — protege articulaciones y sostiene el volumen que se viene.</li>
         </ul>
       </div>
+      `}
     </div>
   `;
 }
@@ -2885,6 +2888,12 @@ document.addEventListener('click', (e) => {
 
   const gotoPlan = e.target.closest('[data-goto-plan]');
   if (gotoPlan) { S.tab = 'plan'; render(); return; }
+
+  const gotoPlanDetail = e.target.closest('[data-goto-plan-detail]');
+  if (gotoPlanDetail) { S.tab = 'plan'; progressDetailOpen = true; render(); return; }
+
+  const toggleProgressDetail = e.target.closest('[data-toggle-progress-detail]');
+  if (toggleProgressDetail) { progressDetailOpen = !progressDetailOpen; render(); return; }
 
   const chip = e.target.closest('[data-week]');
   if (chip) { S.selectedWeek = parseInt(chip.dataset.week, 10); render(); return; }
