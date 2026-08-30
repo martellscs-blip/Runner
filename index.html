@@ -406,6 +406,7 @@ const hasClaudeStorage = typeof window.storage !== 'undefined' && window.storage
    STRAVA CONFIG
 --------------------------------------------------------------- */
 const STRAVA_CLIENT_ID = '273128';
+// SEGURIDAD: este secreto no debería vivir en un frontend público. Muévelo a un backend/serverless y rota el secreto de Strava antes de publicar una versión definitiva.
 const STRAVA_CLIENT_SECRET = 'd6c812b645e4d0c62d0587c3cc2f4b0cdbd28c55';
 const STRAVA_REDIRECT_URI = 'https://martellscs-blip.github.io/Runner/';
 const STRAVA_SCOPE = 'activity:read_all,profile:read_all';
@@ -512,14 +513,13 @@ function secToDuration(sec) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-// Marca automáticamente la sesión del plan que corresponde a la fecha exacta de la actividad
+// Marca automáticamente solo la sesión cuya fecha coincide exactamente con la actividad.
+// Si corres otro día, NO se marca una sesión distinta por accidente.
 function autoMarkSession(dateObj) {
   const weekIdx = PLAN.findIndex(w => dateObj >= w.start && dateObj <= w.end);
-  if (weekIdx < 0) return;
+  if (weekIdx < 0) return false;
   const week = PLAN[weekIdx];
   const dateStr = fmt(dateObj);
-
-  // 1) intento de coincidencia exacta con las fechas asignadas (vie/sáb/dom)
   const exactMap = [
     [1, week.day1Date],
     [2, week.day2Date],
@@ -528,18 +528,10 @@ function autoMarkSession(dateObj) {
   for (const [dayIdx, d] of exactMap) {
     if (fmt(d) === dateStr) {
       S.sessionsDone[`${week.week}-${dayIdx}`] = true;
-      return;
+      return true;
     }
   }
-
-  // 2) si corriste en otro día de esa semana, marca la siguiente sesión pendiente
-  for (const dayIdx of [1, 2, 3]) {
-    const key = `${week.week}-${dayIdx}`;
-    if (!S.sessionsDone[key]) {
-      S.sessionsDone[key] = true;
-      return;
-    }
-  }
+  return false;
 }
 
 async function syncStravaActivities(silent) {
@@ -558,7 +550,7 @@ async function syncStravaActivities(silent) {
 
     while (true) {
       const params = new URLSearchParams({ after: String(after), per_page: '100', page: String(page) });
-      const res = await fetch(`https://www.strava.com/api/v3/athlete/activities?${params.toString()}`, {
+      const res = await fetch(`https://api-v3.strava.com/athlete/activities?${params.toString()}`, {
         headers: { Authorization: `Bearer ${S.strava.accessToken}` },
       });
       if (!res.ok) throw new Error('activities fetch failed');
@@ -782,6 +774,53 @@ function renderRecentActivities() {
   `;
 }
 
+function getTrainingStats() {
+  const runs = Object.values(S.activities).filter(a => ['Run','TrailRun'].includes(a.sportType));
+  const cutoff7 = new Date(today); cutoff7.setDate(cutoff7.getDate() - 6);
+  const cutoff28 = new Date(today); cutoff28.setDate(cutoff28.getDate() - 27);
+  const inRange = (a, cutoff) => { const d = new Date(a.date + 'T00:00:00'); return d >= cutoff && d <= today; };
+  const last7 = runs.filter(a => inRange(a, cutoff7));
+  const last28 = runs.filter(a => inRange(a, cutoff28));
+  const km7 = last7.reduce((sum,a) => sum + (a.distanceKm || 0), 0);
+  const km28 = last28.reduce((sum,a) => sum + (a.distanceKm || 0), 0);
+  const longest7 = last7.reduce((max,a) => Math.max(max, a.distanceKm || 0), 0);
+  const recentPaces = last7.filter(a => a.movingTimeSec && a.distanceKm > 0).map(a => a.movingTimeSec / a.distanceKm);
+  const avgPaceSec = recentPaces.length ? recentPaces.reduce((a,b) => a+b,0) / recentPaces.length : null;
+  const weeksWithRuns = new Set(last28.map(a => { const d=new Date(a.date+'T00:00:00'); const day=d.getDay(); const monday=new Date(d); monday.setDate(d.getDate() - ((day+6)%7)); return fmt(monday); })).size;
+  const consistency = Math.round((weeksWithRuns / 4) * 100);
+  let loadStatus = 'Sin suficientes datos';
+  let loadTone = 'rgba(255,255,255,0.5)';
+  if (last28.length >= 3) {
+    if (km7 > (km28 / 4) * 1.25) { loadStatus = 'Volumen alto esta semana'; loadTone = '#facc15'; }
+    else if (km7 < (km28 / 4) * 0.55) { loadStatus = 'Volumen bajo esta semana'; loadTone = '#facc15'; }
+    else { loadStatus = 'Volumen estable'; loadTone = '#4ade80'; }
+  }
+  return { km7:+km7.toFixed(1), km28:+km28.toFixed(1), longest7:+longest7.toFixed(1), avgPaceSec, consistency:Math.min(100,consistency), loadStatus, loadTone };
+}
+
+function formatPaceSeconds(sec) {
+  if (!sec || !isFinite(sec)) return '—';
+  const total = Math.round(sec);
+  return `${Math.floor(total/60)}:${String(total%60).padStart(2,'0')} /km`;
+}
+
+function renderTrainingStatusCard() {
+  const st = getTrainingStats();
+  if (!st.km28) return '';
+  return `
+    <div class="backup-card" style="border-color:rgba(255,204,0,0.22);">
+      <div class="eyebrow">Estado de entrenamiento</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;">
+        <div class="stat-card"><div class="val font-display">${st.km7} km</div><div class="lbl">Últimos 7 días</div></div>
+        <div class="stat-card"><div class="val font-display">${st.longest7} km</div><div class="lbl">Tirada más larga</div></div>
+        <div class="stat-card"><div class="val font-display">${formatPaceSeconds(st.avgPaceSec)}</div><div class="lbl">Ritmo medio reciente</div></div>
+        <div class="stat-card"><div class="val font-display">${st.consistency}%</div><div class="lbl">Constancia 4 semanas</div></div>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:${st.loadTone};font-weight:700;">${st.loadStatus}</div>
+    </div>
+  `;
+}
+
 function renderHome() {
   const daysToRace = Math.max(0, Math.round((RACE_DATE - today) / DAY_MS));
   const daysRunCount = S.runDays.length;
@@ -851,6 +890,7 @@ function renderHome() {
         <div class="cta">Toca para ver los 3 entrenamientos de esta semana →</div>
       </button>
 
+      ${renderTrainingStatusCard()}
       ${renderShoeCard()}
       ${renderRecentActivities()}
       ${renderRacesCard()}
@@ -1072,7 +1112,8 @@ function renderGoogleDriveCard() {
       <button class="btn-backup btn-backup-copy" style="width:100%;background:#0b2545;border:1px solid rgba(66,133,244,0.4);color:#8ab4f8;" data-gdrive-backup="1" ${gd.syncing ? 'disabled' : ''}>
         ${icon('cloud',15)} ${gd.syncing ? 'Guardando…' : 'Guardar respaldo en Google Drive'}
       </button>
-      ${gd.error ? `<div style="font-size:11px;color:#f87171;margin-top:8px;">${gd.error}</div>` : ''}
+      ${gd.error ? `<div style="font-size:11px;color:#f87171;margin-top:8px;">${escapeHtml(gd.error)}</div>` : ''}
+      ${gd.lastBackupAt ? `<div style="font-size:10px;color:rgba(255,255,255,0.35);margin-top:7px;text-align:center;">Último respaldo: ${new Date(gd.lastBackupAt).toLocaleString('es-MX',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>` : ''}
       <div style="display:flex;justify-content:center;flex-wrap:wrap;gap:6px 14px;margin-top:10px;">
         <button data-gdrive-restore="1" style="font-size:11px;color:rgba(255,255,255,0.4);text-decoration:underline;" ${gd.syncing ? 'disabled' : ''}>Restaurar último respaldo</button>
         <button data-backup="copy" style="font-size:11px;color:rgba(255,255,255,0.4);text-decoration:underline;">Exportar manual</button>
@@ -1842,6 +1883,12 @@ function renderPeso() {
     .map(([date, weight]) => ({ date, weight: parseFloat(weight) }));
   const lastWeight = chartData.length ? chartData[chartData.length-1].weight : startWeight;
   const delta = +(lastWeight - startWeight).toFixed(1);
+  let weeklyTrend = null;
+  if (chartData.length >= 3) {
+    const first = chartData[0], last = chartData[chartData.length - 1];
+    const days = Math.max(1, (new Date(last.date) - new Date(first.date)) / DAY_MS);
+    weeklyTrend = +(((last.weight - first.weight) / days) * 7).toFixed(2);
+  }
 
   const monthName = MONTHS_ES[today.getMonth()];
   const monthLabel = `${monthName.charAt(0).toUpperCase()}${monthName.slice(1)} ${today.getFullYear()}`;
@@ -1881,6 +1928,7 @@ function renderPeso() {
         <div class="peso-stat"><div class="l">Actual</div><div class="v font-display" style="color:#FFCC00;">${lastWeight}</div><div class="u">kg</div></div>
         <div class="peso-stat"><div class="l">Cambio</div><div class="v font-display" style="color:${delta<=0?'#4ade80':'#f87171'};">${delta > 0 ? '+' : ''}${delta}</div><div class="u">kg</div></div>
       </div>
+      ${weeklyTrend !== null ? `<div class="card" style="margin-top:12px;"><div class="eyebrow">Tendencia</div><div style="font-size:15px;font-weight:700;color:${weeklyTrend <= 0 ? '#4ade80' : '#f87171'};">${weeklyTrend > 0 ? '+' : ''}${weeklyTrend} kg/semana</div><div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:4px;">Calculada con tus pesajes registrados.</div></div>` : ''}
 
       ${chartData.length >= 2 ? `<div class="chart-card"><canvas id="weightCanvas" style="width:100%;height:100%;"></canvas></div>` : ''}
 
@@ -1987,20 +2035,24 @@ function escapeHtml(str) {
 
 function backupPayloadObject() {
   return {
+    backupVersion: 2,
+    app: 'Runner',
+    exportedAt: new Date().toISOString(),
     runDays: S.runDays, weighIns: S.weighIns, sessionsDone: S.sessionsDone,
     activities: S.activities, shoes: S.shoes, weightSettings: S.weightSettings,
     races: S.races,
-    exportedAt: new Date().toISOString(),
   };
 }
 
 function applyRestoredData(parsed) {
-  if (Array.isArray(parsed.runDays)) S.runDays = parsed.runDays;
-  if (parsed.weighIns && typeof parsed.weighIns === 'object') S.weighIns = parsed.weighIns;
-  if (parsed.sessionsDone && typeof parsed.sessionsDone === 'object') S.sessionsDone = parsed.sessionsDone;
-  if (parsed.activities && typeof parsed.activities === 'object') S.activities = parsed.activities;
-  if (parsed.shoes && typeof parsed.shoes === 'object') S.shoes = { ...S.shoes, ...parsed.shoes };
-  if (parsed.weightSettings && typeof parsed.weightSettings === 'object') S.weightSettings = { ...S.weightSettings, ...parsed.weightSettings };
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Formato de respaldo inválido');
+  if (parsed.app && parsed.app !== 'Runner') throw new Error('Este respaldo no pertenece a Runner');
+  if (Array.isArray(parsed.runDays)) S.runDays = [...new Set(parsed.runDays.filter(v => typeof v === 'string'))];
+  if (parsed.weighIns && typeof parsed.weighIns === 'object' && !Array.isArray(parsed.weighIns)) S.weighIns = { ...parsed.weighIns };
+  if (parsed.sessionsDone && typeof parsed.sessionsDone === 'object' && !Array.isArray(parsed.sessionsDone)) S.sessionsDone = { ...parsed.sessionsDone };
+  if (parsed.activities && typeof parsed.activities === 'object' && !Array.isArray(parsed.activities)) S.activities = { ...parsed.activities };
+  if (parsed.shoes && typeof parsed.shoes === 'object' && !Array.isArray(parsed.shoes)) S.shoes = { ...S.shoes, ...parsed.shoes };
+  if (parsed.weightSettings && typeof parsed.weightSettings === 'object' && !Array.isArray(parsed.weightSettings)) S.weightSettings = { ...S.weightSettings, ...parsed.weightSettings };
   if (Array.isArray(parsed.races)) S.races = parsed.races;
 }
 
